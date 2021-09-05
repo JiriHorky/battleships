@@ -435,7 +435,7 @@ int place_ship(grid_t & grid, const int pos, ship_t & ship) {
 }
 
 
-void add_frequencies(ll frequencies[], vector<ship_t *> ships) {
+void add_frequencies(ll frequencies[], const vector<ship_t *> & ships) {
 	for (auto ship : ships) {
 		for (auto pos: ship->get_grid_positions()) {
 			frequencies[pos] += 1;
