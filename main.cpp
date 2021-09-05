@@ -32,6 +32,7 @@ typedef long long ll;
 ll frequencies[WIDTH*HEIGHT];
 unsigned long long hits  = 0;
 
+
 class ship {
 	public:
 		ship(const char * name, unsigned char width, unsigned char height, const vector<bool> shape) {
@@ -246,11 +247,51 @@ class ship {
 
 typedef ship ship_t;
 
+class shapes_map {
+	public:
+		shapes_map(const vector<ship_t *> ships) {
+			std::set<size_t> hashes;
+			std::vector<size_t> sorted_hashes;
+
+			//get unique hashes
+			for (const auto & ship: ships) {
+				hashes.insert(ship->shape_hash());
+			}
+
+			for (const auto & hash: hashes) {
+				_hash_pairs.push_back(std::pair(hash, 0));
+			}
+		}
+
+		const int & operator[] (size_t & key ) const {
+			for (const auto & pair: _hash_pairs) {
+				if (pair.first == key) {
+					return pair.second;
+				}
+			}
+			//not found!
+			assert(false);
+		};
+
+		int & operator[] (size_t & key ) {
+			for (auto & pair: _hash_pairs) {
+				if (pair.first == key) {
+					return pair.second;
+				}
+			}
+			//not found!
+			assert(false);
+		};
+
+	private:
+		std::vector<std::pair<size_t, int>> _hash_pairs;
+
+};
+
+
 vector<ship_t *> global_ships; 
 
-
-//this contains hashes of ship's shapes that are already placed with the index - used for the "already_tried_positions" data structure
-std::unordered_map<size_t, int> shapes_placed;
+shapes_map shapes_placed(global_ships);
 
 typedef std::bitset<SIZE> grid_t;
 
@@ -402,9 +443,11 @@ void add_frequencies(ll frequencies[], vector<ship_t *> ships) {
 	}
 }
 
+
+
+
 void place_ships(grid_t grid, vector<ship_t *> ships) {
 	int idx, prev_idx;
-	int was_first = 0;
 
 	if (ships.size() == 0) {
 		add_frequencies(frequencies, global_ships);
@@ -509,6 +552,7 @@ int main(int argc, char * argv[]) {
 //	place_ship(grid, 2, dvojka1);
 //	place_ship(grid, 10, dvojka2);
 //	print_grid_with_ships(grid, global_ships);
+	shapes_placed = shapes_map(global_ships);
 	place_ships(grid, ships);
 	print_grid(frequencies);
 	printf("Total hits: %llu\n", hits);
