@@ -421,10 +421,7 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 	ships.erase(ships.begin());
 
 	size_t h = ship->shape_hash();
-	if ( shapes_placed.count(h) == 0 ) {
-		was_first = 1;
-	} 
-	
+
 	while (idx < SIZE) { 
 		assert( ship->pos == -1 ); //ship not placed yet
 		if ( ship->width == 5 ) {
@@ -432,7 +429,7 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 		}
 
 		//if similar shape is already placed
-		if ( ! was_first && idx <= shapes_placed[h]) {
+		if ( idx < shapes_placed[h]) {
 //				cout << "Skipping placing " << ship->name << " on idx " << idx << " because the previously placed ship was on higher index <" << shapes_placed[h] << endl;
 		} else {
 	//		printf("placing ship: %s on idx: %d\n", ship->name.c_str(), idx);
@@ -446,14 +443,8 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 				place_ships(grid, ships);
 
 				//unplace ship
-				
 //				printf("Unplacing: %s from pos: %d\n", ship->name.c_str(), idx);	
-
-				if (was_first) {
-					shapes_placed.erase(h);
-				} else {
-					shapes_placed[h] = prev_idx;
-				}
+				shapes_placed[h] = prev_idx;
 				grid = old_grid;
 				ship->set_pos(-1);
 			} else {
