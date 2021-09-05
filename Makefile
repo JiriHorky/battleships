@@ -1,5 +1,6 @@
 CC = g++
-CFLAGS = -Wall -O3 -pg 
+#CFLAGS = -Wall -O3 -g -fprofile-arcs -ftest-coverage 
+CFLAGS = -Wall -O3 -g 
 OUTDIR = bin
 
 SRCS = main.cpp 

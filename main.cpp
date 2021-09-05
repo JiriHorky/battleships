@@ -148,7 +148,7 @@ class ship {
 			}
 		}
 
-		vector<int> get_grid_positions() {
+		const vector<int> & get_grid_positions() const {
 			return grid_positions;
 		}
 
@@ -436,8 +436,8 @@ int place_ship(grid_t & grid, const int pos, ship_t & ship) {
 
 
 void add_frequencies(ll frequencies[], const vector<ship_t *> & ships) {
-	for (auto ship : ships) {
-		for (auto pos: ship->get_grid_positions()) {
+	for (const auto & ship : ships) {
+		for (const auto & pos: ship->get_grid_positions()) {
 			frequencies[pos] += 1;
 		}			
 	}
@@ -448,13 +448,6 @@ void add_frequencies(ll frequencies[], const vector<ship_t *> & ships) {
 
 void place_ships(grid_t grid, vector<ship_t *> ships) {
 	int idx, prev_idx;
-
-	if (ships.size() == 0) {
-		add_frequencies(frequencies, global_ships);
-//		print_grid_with_ships(grid, global_ships);
-		hits += 1;
-		return;
-	}
 
 	//start_position 
 	grid_t g2 = ~grid;
@@ -468,13 +461,12 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 	while (idx < SIZE) { 
 		assert( ship->pos == -1 ); //ship not placed yet
 		if ( ship->width == 5 ) {
-			cout << "Placing ship on idx " << idx << endl;
+			   auto timenow =  chrono::system_clock::to_time_t(chrono::system_clock::now());
+    			cout << "Placing ship on idx " << idx << " " << ctime(&timenow);
 		}
 
-		//if similar shape is already placed
-		if ( idx < shapes_placed[h]) {
-//				cout << "Skipping placing " << ship->name << " on idx " << idx << " because the previously placed ship was on higher index <" << shapes_placed[h] << endl;
-		} else {
+		//if similar shape is not already placed
+		if ( idx >= shapes_placed[h]) {
 	//		printf("placing ship: %s on idx: %d\n", ship->name.c_str(), idx);
 			grid_t old_grid = grid;
 			if (place_ship(grid, idx, *ship)) { //we managed to place the ship there, yes!
@@ -482,9 +474,14 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 				prev_idx = shapes_placed[h];
 				shapes_placed[h] = idx;
 
-				//recurse
-				place_ships(grid, ships);
-
+				if (ships.size() == 0) { //Note: we don't check for this case in the beginning of the place_ships function to safe some function calls
+					add_frequencies(frequencies, global_ships);
+					//		print_grid_with_ships(grid, global_ships);
+					hits += 1;
+				} else {
+					//recurse
+					place_ships(grid, ships);
+				}
 				//unplace ship
 //				printf("Unplacing: %s from pos: %d\n", ship->name.c_str(), idx);	
 				shapes_placed[h] = prev_idx;
@@ -530,9 +527,10 @@ int main(int argc, char * argv[]) {
 			 1,1,1,1,1}\
 		  	);
 	vector<ship_t *> ships;
-//	ships.push_back(&kriznik);
-//	ships.push_back(&parnik1);
-//	ships.push_back(&parnik2);
+/*	ships.push_back(&kriznik);
+	ships.push_back(&parnik1);
+	ships.push_back(&parnik2);
+	*/
 	ships.push_back(&petka);
 	ships.push_back(&ctyrka);
 	ships.push_back(&trojka1);
@@ -553,6 +551,8 @@ int main(int argc, char * argv[]) {
 //	place_ship(grid, 10, dvojka2);
 //	print_grid_with_ships(grid, global_ships);
 	shapes_placed = shapes_map(global_ships);
+	bzero(frequencies, SIZE*sizeof(ll));
+
 	place_ships(grid, ships);
 	print_grid(frequencies);
 	printf("Total hits: %llu\n", hits);
