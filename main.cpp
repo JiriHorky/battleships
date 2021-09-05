@@ -20,7 +20,7 @@ typedef long long ll;
 
 // CONSTANTS
 // board dimensions
-#define WIDTH 9
+#define WIDTH 8
 #define HEIGHT 8
 #define SIZE WIDTH*HEIGHT
 
@@ -496,10 +496,10 @@ int main(int argc, char * argv[]) {
 			 1,1,1,1,1}\
 		  	);
 	vector<ship_t *> ships;
-	ships.push_back(&kriznik);
-	ships.push_back(&parnik1);
+//	ships.push_back(&kriznik);
+//	ships.push_back(&parnik1);
 //	ships.push_back(&parnik2);
-//	ships.push_back(&petka);
+	ships.push_back(&petka);
 	ships.push_back(&ctyrka);
 	ships.push_back(&trojka1);
 	ships.push_back(&trojka2);
@@ -509,7 +509,7 @@ int main(int argc, char * argv[]) {
 	ships.push_back(&jednicka1);
 	ships.push_back(&jednicka2);
 	ships.push_back(&jednicka3);
-	ships.push_back(&jednicka4);
+//	ships.push_back(&jednicka4);
 //
 	global_ships = ships;
 
