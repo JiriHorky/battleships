@@ -142,17 +142,25 @@ class ship {
 				int sw = i % width;
 
 				if (shape[i]) {
-					this->grid_positions.insert((h+sh)*WIDTH + (w+sw));
+					this->grid_positions.push_back((h+sh)*WIDTH + (w+sw));
 				}
 			}
 		}
 
-		set<int> get_grid_positions() {
+		vector<int> get_grid_positions() {
 			return grid_positions;
 		}
 
 		bool is_on_pos(const int grid_pos) const {
-			return grid_positions.count(grid_pos);
+			for (const auto & p: grid_positions) {
+				if (p > grid_pos) {
+					return false;
+				}
+				if (p == grid_pos) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		int fits_in_grid(int pos) {
@@ -175,7 +183,7 @@ class ship {
 		vector<bool> shape;
 		vector<bool> surr_shape;
 
-		set<int> grid_positions;
+		vector<int> grid_positions;
 
 		// boundind box of the ship
 		unsigned char width;
