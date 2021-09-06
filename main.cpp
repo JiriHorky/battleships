@@ -20,7 +20,7 @@ typedef long long ll;
 
 // CONSTANTS
 // board dimensions
-#define WIDTH 8
+#define WIDTH 9
 #define HEIGHT 8
 #define SIZE WIDTH*HEIGHT
 
@@ -114,18 +114,27 @@ class ship {
 
 			this->name = name;
 			this->pos = -1;
+			_shape_map_index = -1;
 			_compute_shape_hash();
 		} //end of contructor
 
-		bool is_ship_shape(int dx, int dy) {
+		bool is_ship_shape(const int dx, const int dy) {
 			return shape[dy * width + dx ];	
 		}
 
-		bool is_ship_surr_shape(int dx, int dy) {
+		bool is_ship_surr_shape(const int dx, const int dy) {
 			return surr_shape[dy * surr_width + dx ];	
 		}
 
-		void set_pos(int grid_pos) {
+		void set_shape_map_index(const size_t i) {
+			_shape_map_index = i;
+		}
+
+		size_t get_shape_map_index() const {
+			return _shape_map_index;
+		}
+
+		void set_pos(const int grid_pos) {
 			this->pos = grid_pos;
 
 			//compute all the grid position this ship is on
@@ -164,7 +173,7 @@ class ship {
 			return false;
 		}
 
-		int fits_in_grid(int pos) {
+		int fits_in_grid(const int pos) const {
 			if ( (pos % WIDTH + width) > WIDTH ) {
 				return 0;
 			}
@@ -174,7 +183,7 @@ class ship {
 			return 1;
 		}
 
-		size_t shape_hash() {
+		size_t shape_hash() const {
 			return _shape_hash;
 		}
 
@@ -201,6 +210,7 @@ class ship {
 
 					private:
 		size_t _shape_hash;
+		size_t _shape_map_index;
 
 		//transpose shape's index to surr_shape index if the "shape" box is placed in the middle of the "surr_shape".
 		int to_surr_index(int idx) {
@@ -249,9 +259,9 @@ typedef ship ship_t;
 
 class shapes_map {
 	public:
-		shapes_map(const vector<ship_t *> ships) {
+		shapes_map(vector<ship_t *> ships) {
 			std::set<size_t> hashes;
-			std::vector<size_t> sorted_hashes;
+			std::vector<size_t> hash_pairs;
 
 			//get unique hashes
 			for (const auto & ship: ships) {
@@ -259,32 +269,37 @@ class shapes_map {
 			}
 
 			for (const auto & hash: hashes) {
-				_hash_pairs.push_back(std::pair(hash, 0));
+				hash_pairs.push_back(hash);
+				_shapes_placement.push_back(0);
 			}
+
+			for (auto & ship: ships) {
+				size_t idx = 0;
+				for (idx=0; idx < hash_pairs.size(); idx++) {
+					if (ship->shape_hash() == hash_pairs[idx]) {
+						ship->set_shape_map_index(idx);
+						break;
+					}
+				}
+			}
+
+			size_t i = 0;
+			for (i=0; i < hash_pairs.size(); i++) {
+				cout << i << " " << hash_pairs[i] << endl;
+			}
+
 		}
 
-		const int & operator[] (size_t & key ) const {
-			for (const auto & pair: _hash_pairs) {
-				if (pair.first == key) {
-					return pair.second;
-				}
-			}
-			//not found!
-			assert(false);
+		const int & operator[] (const size_t & key ) const {
+			return _shapes_placement[key];
 		};
 
-		int & operator[] (size_t & key ) {
-			for (auto & pair: _hash_pairs) {
-				if (pair.first == key) {
-					return pair.second;
-				}
-			}
-			//not found!
-			assert(false);
+		int & operator[] (const size_t & key ) {
+			return _shapes_placement[key];
 		};
 
 	private:
-		std::vector<std::pair<size_t, int>> _hash_pairs;
+		std::vector<int> _shapes_placement;
 
 };
 
@@ -335,13 +350,13 @@ void print_grid(const T grid, bool print_numbers=false) {
 		printf("|");
 		for (j=0; j<WIDTH; j++) {
 			pos = i*WIDTH+j;
-			int c;
+			unsigned long long c;
 			if (print_numbers) {
 				c = pos;
 			} else {
 				c = grid[pos];
 			}
-			printf("%*d|", num_digits, c);
+			printf("%*lld|", num_digits, c);
 		}
 	}
 	printf("\n");
@@ -391,7 +406,7 @@ void print_grid_with_ships(const grid_t grid, vector<ship_t*> ships) {
 
 //places ship's shape
 
-int place_ship(grid_t & grid, const int pos, ship_t & ship) {
+int place_ship(grid_t & grid, const int & pos, ship_t & ship) {
 	int sh, sw;
 	int p;
 
@@ -456,7 +471,7 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 	ship_t * ship = ships.front();
 	ships.erase(ships.begin());
 
-	size_t h = ship->shape_hash();
+	const size_t h = ship->get_shape_map_index();
 
 	while (idx < SIZE) { 
 		assert( ship->pos == -1 ); //ship not placed yet
@@ -485,11 +500,9 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 				//unplace ship
 //				printf("Unplacing: %s from pos: %d\n", ship->name.c_str(), idx);	
 				shapes_placed[h] = prev_idx;
-				grid = old_grid;
 				ship->set_pos(-1);
-			} else {
-				grid = old_grid;
 			}
+			grid = old_grid;
 		} 
 		g2 = ~grid;
 		idx = g2._Find_next(idx);
@@ -527,7 +540,8 @@ int main(int argc, char * argv[]) {
 			 1,1,1,1,1}\
 		  	);
 	vector<ship_t *> ships;
-/*	ships.push_back(&kriznik);
+//	ships.push_back(&kriznik);
+/*
 	ships.push_back(&parnik1);
 	ships.push_back(&parnik2);
 	*/
