@@ -1,10 +1,9 @@
 #include "dp.h"
+#include "parallel.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <exception>
-#include <mutex>
 #include <stdexcept>
 #include <thread>
 
@@ -67,6 +66,9 @@ struct Accumulator {
 	std::vector<MT> masks;
 	std::vector<CT> vals;
 	bool ovf = false;
+	// state budget shared by all accumulators of one DP run
+	const std::atomic<size_t> * stored = nullptr;
+	size_t budget = 0;
 
 	void reset() {
 		if (slots.size() > (1u << 16)) std::vector<uint32_t>().swap(slots);
@@ -91,6 +93,8 @@ struct Accumulator {
 				slots[s] = (uint32_t)masks.size();
 				masks.push_back(m);
 				vals.push_back(v);
+				if ((masks.size() & 4095) == 0 && stored && masks.size() + stored->load(std::memory_order_relaxed) > budget)
+					throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
 				if (masks.size() * 2 > slots.size()) grow();
 				return;
 			}
@@ -102,36 +106,6 @@ struct Accumulator {
 	}
 };
 
-template <typename F>
-static void parallel_for(int nthreads, size_t n, F fn) {
-	std::atomic<size_t> next(0);
-	std::exception_ptr err;
-	std::mutex err_mu;
-	auto work = [&](int tid) {
-		try {
-			for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < n;) fn(i, tid);
-		} catch (...) {
-			next = n;  // stop the other workers
-			std::lock_guard<std::mutex> lk(err_mu);
-			if (!err) err = std::current_exception();
-		}
-	};
-	if (nthreads <= 1 || n <= 1) {
-		work(0);
-	} else {
-		std::vector<std::thread> th;
-		try {
-			for (int t = 1; t < nthreads; t++) th.emplace_back(work, t);
-		} catch (...) {  // could not start a thread: stop, join the started ones, rethrow
-			next = n;
-			for (auto & t : th) t.join();
-			throw;
-		}
-		work(0);
-		for (auto & t : th) t.join();
-	}
-	if (err) std::rethrow_exception(err);  // surface worker exceptions to the caller
-}
 
 template <typename MT>
 struct Trans {
@@ -243,6 +217,13 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 	std::vector<Accumulator<MT, CT>> acc(nthreads);
 	std::atomic<bool> ovf(false);
 	std::atomic<size_t> stored(0);
+	// max_states is calibrated for 16-byte states (64-bit mask + 64-bit count);
+	// scale it so wider masks/counts get the same memory budget.
+	const size_t budget = (size_t)((long double)max_states * 16 / (sizeof(MT) + sizeof(CT)));
+	for (auto & a : acc) {
+		a.stored = &stored;
+		a.budget = budget;
+	}
 	for (int g = 0; g < G; g++) {
 		auto & cur = L[g];
 		auto & nxt = L[g + 1];
@@ -276,7 +257,7 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 				}
 			}
 			if (A.ovf) ovf = true;
-			if (stored.fetch_add(A.masks.size()) + A.masks.size() > max_states)
+			if (stored.fetch_add(A.masks.size()) + A.masks.size() > budget)
 				throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
 			nxt[d].mask.assign(A.masks.begin(), A.masks.end());
 			nxt[d].fwd.assign(A.vals.begin(), A.vals.end());

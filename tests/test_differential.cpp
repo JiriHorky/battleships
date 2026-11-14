@@ -6,6 +6,7 @@
 #include "../src/brute.h"
 #include "../src/dp.h"
 #include "../src/fleets.h"
+#include "../src/parallel.h"
 #include "test_util.h"
 
 using namespace bs;
@@ -174,4 +175,30 @@ TEST(dp_state_budget_propagates_from_workers) {
 		}
 		CHECK(threw);
 	}
+}
+
+// An exception thrown only on worker threads (tid != 0) must reach the caller.
+// tid 0 is slowed down so the workers are guaranteed to pick up items.
+TEST(parallel_for_propagates_worker_exception) {
+	bool threw = false;
+	std::atomic<int> worker_items(0);
+	try {
+		parallel_for(4, 400, [&](size_t, int tid) {
+			if (tid != 0) {
+				worker_items++;
+				throw std::logic_error("worker");
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		});
+	} catch (const std::logic_error & e) {
+		threw = std::string(e.what()) == "worker";
+	}
+	CHECK(threw);
+	CHECK(worker_items > 0);
+	// and a normal run visits every item exactly once
+	std::vector<std::atomic<int>> seen(1000);
+	parallel_for(8, seen.size(), [&](size_t i, int) { seen[i]++; });
+	bool once = true;
+	for (auto & v : seen) once &= v == 1;
+	CHECK(once);
 }

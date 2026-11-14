@@ -40,7 +40,9 @@ struct DpOptions {
 	bool allow_transpose = true;   // scan along the longer side
 	bool force_wide_counts = false;  // skip the uint64 attempt (testing)
 	// Abort with std::runtime_error once the forward pass has stored more
-	// states than this (~16 bytes each; the 10x10 game fleet needs ~3e8).
+	// states than this. Calibrated for 16-byte states (~24 GB by default);
+	// scaled down when 128-bit masks or counts are needed. The 10x10 game
+	// fleet needs ~3e8.
 	size_t max_states = 1500000000;
 };
 
