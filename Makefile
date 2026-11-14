@@ -25,7 +25,8 @@ $(OUTDIR)/bench: $(LIB_SRCS) $(LIB_HDRS) src/bench.cpp | $(OUTDIR)
 $(OUTDIR)/play: $(LIB_SRCS) $(LIB_HDRS) src/play.cpp | $(OUTDIR)
 	$(CXX) $(CXXFLAGS) $(LIB_SRCS) src/play.cpp -o $@
 
-# Benchmark set: legacy setups and the 10x10 game fleet from empty board to late game (fast scenarios only).
+# Benchmark set: legacy setups and the 10x10 game fleet from empty board to
+# late game (~5 s total, ~5 GB peak for the empty board) (fast scenarios only).
 bench: $(OUTDIR)/bench
 	./$(OUTDIR)/bench --repeat 3 legacy game-
 

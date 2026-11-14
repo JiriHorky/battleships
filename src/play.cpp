@@ -1,6 +1,7 @@
 // Compute hit probabilities for a game state.
 //
 // usage: play [--fleet game|czech|legacy] [--no-rotate] [--threads N] [state-file]
+// exit code: 0 ok, 1 bad input, 2 no configuration fits the state
 //
 // The state is read from the file (or stdin): one line per row, one character
 // per cell (spaces are ignored):
@@ -30,6 +31,7 @@ static GameState parse(std::istream & in, const Fleet & fleet, bool rotate) {
 	}
 	if (rows.empty()) throw std::invalid_argument("empty state");
 	int H = (int)rows.size(), W = (int)rows[0].size();
+	if (W * H > 128) throw std::invalid_argument("board larger than 128 cells");
 	GameState gs(W, H);
 	std::vector<int> sunk;
 	for (int r = 0; r < H; r++) {
@@ -93,8 +95,12 @@ int main(int argc, char ** argv) {
 		else if (!strcmp(argv[i], "--threads") && i + 1 < argc) opt.threads = atoi(argv[++i]);
 		else file = argv[i];
 	}
-	Fleet fleet = fleet_name == "czech" ? fleet_czech() : fleet_name == "legacy" ? fleet_legacy() : fleet_game();
 	try {
+		Fleet fleet;
+		if (fleet_name == "game") fleet = fleet_game();
+		else if (fleet_name == "czech") fleet = fleet_czech();
+		else if (fleet_name == "legacy") fleet = fleet_legacy();
+		else throw std::invalid_argument("unknown fleet '" + fleet_name + "' (use game, czech or legacy)");
 		GameState gs(0, 0);
 		if (file.empty()) gs = parse(std::cin, fleet, rotate);
 		else {
@@ -107,7 +113,8 @@ int main(int argc, char ** argv) {
 		Result r = solve_dp(p, nullptr, opt);
 		double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 		if (r.total == 0) {
-			printf("No fleet configuration is consistent with this state.\n");
+			printf("No fleet configuration is consistent with this state%s%s.\n", p.infeasible ? ": " : "",
+			       p.infeasible_reason.c_str());
 			return 2;
 		}
 		print_heatmap(p, r, true);

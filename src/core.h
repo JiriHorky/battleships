@@ -80,6 +80,7 @@ struct Problem {
 	Mask hits;       // unexplained hits: must be covered by some remaining ship
 	Mask sunk_cells; // cells of sunk ships (reported as certain)
 	bool infeasible = false;  // state is self-contradictory
+	std::string infeasible_reason;  // first contradiction found, if any
 };
 
 Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate);

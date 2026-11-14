@@ -38,7 +38,9 @@ State format, one line per row (spaces are ignored):
 | `S` | cell of a sunk ship (the ship type is recognised by shape) |
 
 Output: a heatmap of hit probabilities in %, the number of consistent
-configurations, and the unknown cell most likely to hold a ship.
+configurations, and the unknown cell most likely to hold a ship. Exit code 1
+means bad input. Exit code 2 means no configuration fits the state, with the
+contradiction named when it is a direct one (e.g. a hit touching a sunk ship).
 
 ## Fleets (`src/fleets.h`)
 
@@ -65,8 +67,11 @@ kriznik  . # . # .     parnik  . # .
     first cell. The state is (cells ahead already taken, ships still to
     place), and many partial layouts share the same state.
   * Every ship is grown by one cell right and down onto a (W+1)x(H+1) board.
-    Two ships touch iff their grown shapes overlap, so one 64-bit mask encodes
-    the no-touch rule. The grown cells left over also give an exact bound on
+    Two ships touch iff their grown shapes overlap, so the no-touch rule is a
+    single bitmask test. The mask only covers the cells ahead of the current
+    cell, up to a ship's farthest reach (57 cells on 10x10), so it fits in
+    64 bits; very wide boards use 128 bits. The grown cells left over also
+    give an exact bound on
     wasted space, which prunes hopeless states early.
   * A forward pass (ways to reach each state) and a backward pass (ways to
     complete it) give exact per-placement and per-cell counts.

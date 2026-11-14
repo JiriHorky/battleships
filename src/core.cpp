@@ -104,6 +104,10 @@ Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate) {
 	p.hits = 0;
 	p.sunk_cells = 0;
 
+	auto fail = [&](const std::string & why) {
+		if (!p.infeasible) p.infeasible_reason = why;
+		p.infeasible = true;
+	};
 	Mask forbidden = 0;  // no remaining ship cell may be here
 	for (int i = 0; i < p.N; i++) {
 		if (gs.cells[i] == MISS) forbidden |= bit(i);
@@ -125,15 +129,15 @@ Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate) {
 					shape_mask(p.W, p.H, o, r, c, om);
 					shape_ok = om == m && popcount(m) == (int)s.cells.size();
 				}
-		if (!shape_ok) p.infeasible = true;
-		if (m & forbidden) p.infeasible = true;  // sunk ship on a miss
-		if (--p.types[s.type].count < 0) p.infeasible = true;
+		if (!shape_ok) fail("sunk ship cells do not match its shape");
+		if (m & forbidden) fail("sunk ship on a miss or touching another sunk ship");
+		if (--p.types[s.type].count < 0) fail("more sunk ships of type '" + p.types[s.type].name + "' than the fleet has");
 		Mask h = halo_of(p.W, p.H, m);
-		if (h & p.sunk_cells) p.infeasible = true;  // two sunk ships touching
+		if (h & p.sunk_cells) fail("two sunk ships touch");
 		p.sunk_cells |= m;
 		forbidden |= h;
 	}
-	if (p.hits & forbidden & ~p.sunk_cells) p.infeasible = true;  // hit next to a sunk ship
+	if (p.hits & forbidden & ~p.sunk_cells) fail("a hit touches a sunk ship");
 	p.hits &= ~p.sunk_cells;
 
 	for (int t = 0; t < (int)p.types.size(); t++) {
