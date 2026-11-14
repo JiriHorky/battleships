@@ -137,3 +137,23 @@ TEST(dp_count_width_threads_transpose_agree) {
 		CHECK(a.total == c.total && a.cell_counts == c.cell_counts);
 	}
 }
+
+// Review follow-ups: stats survive the 128-bit retry; absurd fleets are
+// rejected with an error instead of exhausting memory.
+TEST(dp_stats_and_limits) {
+	Problem p = make_problem(GameState(8, 3), Fleet{{"i2", ship_straight(2), 2}}, true);
+	DpOptions o;
+	o.force_wide_counts = true;
+	DpStats st;
+	solve_dp(p, &st, o);
+	CHECK(st.transposed);
+	Fleet many;
+	for (int t = 0; t < 24; t++) many.push_back({"t", ship_straight(1), 1});
+	bool threw = false;
+	try {
+		solve_dp(make_problem(GameState(10, 10), many, true));
+	} catch (const std::invalid_argument &) {
+		threw = true;
+	}
+	CHECK(threw);
+}

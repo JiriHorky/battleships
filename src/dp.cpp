@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <exception>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 
@@ -103,17 +105,26 @@ struct Accumulator {
 template <typename F>
 static void parallel_for(int nthreads, size_t n, F fn) {
 	std::atomic<size_t> next(0);
+	std::exception_ptr err;
+	std::mutex err_mu;
 	auto work = [&](int tid) {
-		for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < n;) fn(i, tid);
+		try {
+			for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < n;) fn(i, tid);
+		} catch (...) {
+			next = n;  // stop the other workers
+			std::lock_guard<std::mutex> lk(err_mu);
+			if (!err) err = std::current_exception();
+		}
 	};
 	if (nthreads <= 1 || n <= 1) {
 		work(0);
-		return;
+	} else {
+		std::vector<std::thread> th;
+		for (int t = 1; t < nthreads; t++) th.emplace_back(work, t);
+		work(0);
+		for (auto & t : th) t.join();
 	}
-	std::vector<std::thread> th;
-	for (int t = 1; t < nthreads; t++) th.emplace_back(work, t);
-	work(0);
-	for (auto & t : th) t.join();
+	if (err) std::rethrow_exception(err);  // surface worker exceptions to the caller
 }
 
 template <typename MT>
@@ -172,6 +183,8 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		nfleet64 *= radix[t];
 		if (nfleet64 > (1u << 24)) throw std::invalid_argument("fleet too varied for the DP solver");
 	}
+	// every layer keeps one (small) group object per fleet value
+	if (nfleet64 * (uint64_t)(G + 1) > (1u << 22)) throw std::invalid_argument("fleet too varied for the DP solver");
 	const uint32_t nfleet = (uint32_t)nfleet64;
 	auto digit = [&](uint32_t f, int t) { return (f / stride[t]) % radix[t]; };
 	const uint32_t full = nfleet - 1;
@@ -345,7 +358,11 @@ static void run_with_fallback(const Problem & p, Result & res, DpStats * stats, 
 	if (!wide_counts && run_dp<MT, uint64_t>(p, res, stats, nthreads)) return;
 	res.total = 0;
 	res.cell_counts.assign(p.N, 0);
-	if (stats) *stats = DpStats();
+	if (stats) {
+		bool tr = stats->transposed;
+		*stats = DpStats();
+		stats->transposed = tr;
+	}
 	if (!run_dp<MT, u128>(p, res, stats, nthreads)) throw std::overflow_error("DP counts overflow 128 bits");
 }
 
