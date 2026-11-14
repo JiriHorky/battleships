@@ -67,8 +67,9 @@ struct Accumulator {
 	std::vector<CT> vals;
 	bool ovf = false;
 	// state budget shared by all accumulators of one DP run
-	const std::atomic<size_t> * stored = nullptr;
+	std::atomic<size_t> * stored = nullptr;
 	size_t budget = 0;
+	size_t reported = 0;  // states of the current group already added to *stored
 
 	void reset() {
 		if (slots.size() > (1u << 16)) std::vector<uint32_t>().swap(slots);
@@ -76,6 +77,15 @@ struct Accumulator {
 		mod = slots.size() - 1;
 		masks.clear();
 		vals.clear();
+		reported = 0;
+	}
+	// Adds this group's not-yet-reported states to the shared counter, so
+	// in-progress groups of all threads count against the budget.
+	void report() {
+		if (!stored) return;
+		size_t total = stored->fetch_add(masks.size() - reported) + masks.size() - reported;
+		reported = masks.size();
+		if (total > budget) throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
 	}
 	void grow() {
 		slots.assign(slots.size() * 2, EMPTY);
@@ -93,8 +103,7 @@ struct Accumulator {
 				slots[s] = (uint32_t)masks.size();
 				masks.push_back(m);
 				vals.push_back(v);
-				if ((masks.size() & 4095) == 0 && stored && masks.size() + stored->load(std::memory_order_relaxed) > budget)
-					throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
+				if ((masks.size() & 4095) == 0) report();
 				if (masks.size() * 2 > slots.size()) grow();
 				return;
 			}
@@ -105,7 +114,6 @@ struct Accumulator {
 		}
 	}
 };
-
 
 template <typename MT>
 struct Trans {
@@ -257,8 +265,7 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 				}
 			}
 			if (A.ovf) ovf = true;
-			if (stored.fetch_add(A.masks.size()) + A.masks.size() > budget)
-				throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
+			A.report();
 			nxt[d].mask.assign(A.masks.begin(), A.masks.end());
 			nxt[d].fwd.assign(A.vals.begin(), A.vals.end());
 		});

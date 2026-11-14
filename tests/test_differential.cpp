@@ -178,7 +178,8 @@ TEST(dp_state_budget_propagates_from_workers) {
 }
 
 // An exception thrown only on worker threads (tid != 0) must reach the caller.
-// tid 0 is slowed down so the workers are guaranteed to pick up items.
+// tid 0 sleeps per item so the workers get items in practice (not a strict
+// guarantee: an unscheduled worker for ~0.8 s would fail the second CHECK).
 TEST(parallel_for_propagates_worker_exception) {
 	bool threw = false;
 	std::atomic<int> worker_items(0);
