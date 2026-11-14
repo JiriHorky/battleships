@@ -24,7 +24,7 @@ $(OUTDIR)/bench: $(LIB_SRCS) $(LIB_HDRS) src/bench.cpp | $(OUTDIR)
 
 # Quick benchmark set (fast scenarios only).
 bench: $(OUTDIR)/bench
-	./$(OUTDIR)/bench --repeat 3 legacy czech-8x8 czech-10x10-shots30 czech-10x10-shots50
+	./$(OUTDIR)/bench --repeat 3 legacy game-10x10-shots20 game-10x10-shots35 game-10x10-shots50
 
 test: $(OUTDIR)/tests
 	./$(OUTDIR)/tests

@@ -73,8 +73,12 @@ inline std::vector<Scenario> all_scenarios() {
 	std::vector<Scenario> v;
 	v.push_back({"legacy-9x8", GameState(9, 8), fleet_legacy(), false});
 	v.push_back({"legacy-9x8-rot", GameState(9, 8), fleet_legacy(), true});
-	v.push_back({"czech-8x8", GameState(8, 8), fleet_czech(), true});
-	v.push_back({"czech-9x9", GameState(9, 9), fleet_czech(), true});
+	v.push_back({"game-8x8", GameState(8, 8), fleet_game(), true});
+	v.push_back({"game-9x9", GameState(9, 9), fleet_game(), true});
+	v.push_back({"game-10x10", GameState(10, 10), fleet_game(), true});
+	for (int shots : {3, 10, 20, 35, 50})
+		v.push_back({"game-10x10-shots" + std::to_string(shots),
+		             random_midgame(10, 10, fleet_game(), true, shots, 2000 + shots), fleet_game(), true});
 	v.push_back({"czech-10x10", GameState(10, 10), fleet_czech(), true});
 	for (int shots : {5, 15, 30, 50})
 		v.push_back({"czech-10x10-shots" + std::to_string(shots),

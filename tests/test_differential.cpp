@@ -86,3 +86,54 @@ TEST(dp_matches_brute_random) {
 	}
 	CHECK(feasible > 100);  // make sure the test is not vacuous
 }
+
+// Wide boards: the solver must transpose or use 128-bit masks (found in review:
+// these used to throw).
+TEST(dp_wide_boards_and_paths) {
+	struct Case { int W, H; Fleet f; };
+	std::vector<Case> cases = {
+		{20, 6, {{"i4", ship_straight(4), 1}}},
+		{40, 3, {{"i3", ship_straight(3), 1}}},
+		{3, 40, {{"i3", ship_straight(3), 2}}},
+		{30, 4, {{"t", ship_parnik(), 1}, {"i2", ship_straight(2), 1}}},
+		{1, 7, {{"i2", ship_straight(2), 2}}},
+		{7, 1, {{"i2", ship_straight(2), 2}}},
+		{4, 4, {}},                                                          // empty fleet
+		{4, 4, {{"i2", ship_straight(2), 0}, {"i1", ship_straight(1), 2}}},  // count-0 type
+	};
+	for (auto & c : cases) {
+		Problem p = make_problem(GameState(c.W, c.H), c.f, true);
+		Result a = solve_brute(p);
+		for (int variant = 0; variant < 4; variant++) {
+			DpOptions o;
+			o.allow_transpose = variant & 1;
+			o.force_wide_counts = variant & 2;
+			o.threads = variant == 3 ? 1 : 0;
+			Result b = solve_dp(p, nullptr, o);
+			bool same = a.total == b.total && a.cell_counts == b.cell_counts;
+			if (!same) fprintf(stderr, "  %dx%d variant %d: brute %s dp %s\n", c.W, c.H, variant,
+			                   to_string(a.total).c_str(), to_string(b.total).c_str());
+			CHECK(same);
+		}
+	}
+}
+
+// 128-bit count path, single-threaded and non-transposed runs agree with the default.
+TEST(dp_count_width_threads_transpose_agree) {
+	std::mt19937 rng(777);
+	for (int iter = 0; iter < 60; iter++) {
+		int W = 3 + rng() % 6, H = 3 + rng() % 6;
+		Fleet f = {{"a", random_shape(rng), 1 + (int)(rng() % 2)}, {"b", random_shape(rng), 1 + (int)(rng() % 3)}};
+		GameState gs = random_state(rng, W, H, f, true);
+		Problem p = make_problem(gs, f, true);
+		Result a = solve_dp(p);
+		DpOptions o1;
+		o1.force_wide_counts = true;
+		DpOptions o2;
+		o2.threads = 1;
+		o2.allow_transpose = false;
+		Result b = solve_dp(p, nullptr, o1), c = solve_dp(p, nullptr, o2);
+		CHECK(a.total == b.total && a.cell_counts == b.cell_counts);
+		CHECK(a.total == c.total && a.cell_counts == c.cell_counts);
+	}
+}

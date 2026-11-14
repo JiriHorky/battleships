@@ -18,7 +18,18 @@ inline Fleet fleet_legacy() {
 	};
 }
 
-// Every ship defined in the original main(): 14 ships, 40 cells.
+// The 10x10 game fleet: 12 ships, 31 cells.
+inline Fleet fleet_game() {
+	return {
+		{"kriznik", ship_kriznik(), 1},
+		{"petka", ship_straight(5), 1},
+		{"parnik", ship_parnik(), 2},
+		{"dvojka", ship_straight(2), 3},
+		{"jednicka", ship_straight(1), 5},
+	};
+}
+
+// Every ship defined in the original main(): 14 ships, 40 cells (stress test).
 inline Fleet fleet_czech() {
 	return {
 		{"kriznik", ship_kriznik(), 1},
