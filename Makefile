@@ -1,17 +1,31 @@
-CC = g++
-#CFLAGS = -Wall -O3 -g -fprofile-arcs -ftest-coverage 
-CFLAGS = -Wall -O3 -g 
+CXX ?= c++
+CXXFLAGS ?= -std=c++17 -Wall -Wextra -O3 -g
 OUTDIR = bin
 
-SRCS = main.cpp 
+LIB_SRCS = src/core.cpp src/brute.cpp
+LIB_HDRS = $(wildcard src/*.h)
+TEST_SRCS = $(wildcard tests/*.cpp)
 
-EXECS = $(SRCS:%.cpp=$(OUTDIR)/%)
-
-all: $(EXECS)
+all: $(OUTDIR)/main $(OUTDIR)/tests
 	@echo Compiled all executables
 
 $(OUTDIR):
-	mkdir $(OUTDIR)
+	mkdir -p $(OUTDIR)
 
-$(OUTDIR)/%: $(SRCS) | $(OUTDIR)
-	$(CC) $(CFLAGS) $(MAINSRC) $(@:$(OUTDIR)/%=%.cpp) -o $@
+# The original solver, kept as-is for reference.
+$(OUTDIR)/main: main.cpp | $(OUTDIR)
+	$(CXX) -Wall -O3 -g main.cpp -o $@
+
+$(OUTDIR)/tests: $(LIB_SRCS) $(LIB_HDRS) $(TEST_SRCS) tests/test_util.h | $(OUTDIR)
+	$(CXX) $(CXXFLAGS) $(LIB_SRCS) $(TEST_SRCS) -o $@
+
+test: $(OUTDIR)/tests
+	./$(OUTDIR)/tests
+
+test-all: $(OUTDIR)/tests
+	./$(OUTDIR)/tests --slow
+
+clean:
+	rm -rf $(OUTDIR)
+
+.PHONY: all test test-all clean
