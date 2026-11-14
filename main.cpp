@@ -1,4 +1,10 @@
-#include <bits/stdc++.h>
+#include <bitset>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
+#include <set>
+#include <string>
+#include <vector>
 #include <assert.h>
 #include <string.h>
 #include <iostream>
@@ -310,6 +316,19 @@ shapes_map shapes_placed(global_ships);
 
 typedef std::bitset<SIZE> grid_t;
 
+// Portable replacements for libstdc++'s bitset::_Find_first/_Find_next
+// (not available in libc++, which Apple clang uses). Both return SIZE
+// when no further set bit exists, same as the libstdc++ versions.
+static inline int grid_find_next(const grid_t & g, int prev) {
+	for (int i = prev + 1; i < SIZE; i++) {
+		if (g[i]) return i;
+	}
+	return SIZE;
+}
+static inline int grid_find_first(const grid_t & g) {
+	return grid_find_next(g, -1);
+}
+
 /*
  * grid bits representation 4x3
   -----------------
@@ -466,7 +485,7 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 
 	//start_position 
 	grid_t g2 = ~grid;
-	idx = g2._Find_first();
+	idx = grid_find_first(g2);
 
 	ship_t * ship = ships.front();
 	ships.erase(ships.begin());
@@ -505,7 +524,7 @@ void place_ships(grid_t grid, vector<ship_t *> ships) {
 			grid = old_grid;
 		} 
 		g2 = ~grid;
-		idx = g2._Find_next(idx);
+		idx = grid_find_next(g2, idx);
 	}
 }
 
