@@ -120,7 +120,13 @@ static void parallel_for(int nthreads, size_t n, F fn) {
 		work(0);
 	} else {
 		std::vector<std::thread> th;
-		for (int t = 1; t < nthreads; t++) th.emplace_back(work, t);
+		try {
+			for (int t = 1; t < nthreads; t++) th.emplace_back(work, t);
+		} catch (...) {  // could not start a thread: stop, join the started ones, rethrow
+			next = n;
+			for (auto & t : th) t.join();
+			throw;
+		}
 		work(0);
 		for (auto & t : th) t.join();
 	}
@@ -169,7 +175,7 @@ static int max_reach(const Problem & p) {
 
 // Returns false if CT overflowed (caller retries with a wider type).
 template <typename MT, typename CT>
-static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthreads) {
+static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthreads, size_t max_states) {
 	const int T = (int)p.types.size();
 	const int GW = p.W + 1, G = GW * (p.H + 1);  // grown board
 
@@ -236,6 +242,7 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 	// ---- Forward pass: build layer g+1 one destination group at a time. ----
 	std::vector<Accumulator<MT, CT>> acc(nthreads);
 	std::atomic<bool> ovf(false);
+	std::atomic<size_t> stored(0);
 	for (int g = 0; g < G; g++) {
 		auto & cur = L[g];
 		auto & nxt = L[g + 1];
@@ -269,6 +276,8 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 				}
 			}
 			if (A.ovf) ovf = true;
+			if (stored.fetch_add(A.masks.size()) + A.masks.size() > max_states)
+				throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
 			nxt[d].mask.assign(A.masks.begin(), A.masks.end());
 			nxt[d].fwd.assign(A.vals.begin(), A.vals.end());
 		});
@@ -354,8 +363,9 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 }
 
 template <typename MT>
-static void run_with_fallback(const Problem & p, Result & res, DpStats * stats, int nthreads, bool wide_counts) {
-	if (!wide_counts && run_dp<MT, uint64_t>(p, res, stats, nthreads)) return;
+static void run_with_fallback(const Problem & p, Result & res, DpStats * stats, int nthreads, bool wide_counts,
+                              size_t max_states) {
+	if (!wide_counts && run_dp<MT, uint64_t>(p, res, stats, nthreads, max_states)) return;
 	res.total = 0;
 	res.cell_counts.assign(p.N, 0);
 	if (stats) {
@@ -363,7 +373,7 @@ static void run_with_fallback(const Problem & p, Result & res, DpStats * stats, 
 		*stats = DpStats();
 		stats->transposed = tr;
 	}
-	if (!run_dp<MT, u128>(p, res, stats, nthreads)) throw std::overflow_error("DP counts overflow 128 bits");
+	if (!run_dp<MT, u128>(p, res, stats, nthreads, max_states)) throw std::overflow_error("DP counts overflow 128 bits");
 }
 
 // The same instance with rows and columns swapped.
@@ -413,8 +423,8 @@ Result solve_dp(const Problem & p0, DpStats * stats, const DpOptions & opt) {
 	if (stats) stats->transposed = transposed;
 
 	int reach = max_reach(p);
-	if (reach < 64) run_with_fallback<uint64_t>(p, res, stats, nthreads, opt.force_wide_counts);
-	else if (reach < 128) run_with_fallback<u128>(p, res, stats, nthreads, opt.force_wide_counts);
+	if (reach < 64) run_with_fallback<uint64_t>(p, res, stats, nthreads, opt.force_wide_counts, opt.max_states);
+	else if (reach < 128) run_with_fallback<u128>(p, res, stats, nthreads, opt.force_wide_counts, opt.max_states);
 	else throw std::invalid_argument("ship reach exceeds 128 grown cells; board too wide");
 
 	if (transposed) {

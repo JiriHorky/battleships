@@ -157,3 +157,21 @@ TEST(dp_stats_and_limits) {
 	}
 	CHECK(threw);
 }
+
+// A state-budget overflow is thrown inside worker threads; it must reach the
+// caller as std::runtime_error (multi- and single-threaded).
+TEST(dp_state_budget_propagates_from_workers) {
+	Problem p = make_problem(GameState(10, 10), fleet_game(), true);
+	for (int threads : {0, 1}) {
+		DpOptions o;
+		o.threads = threads;
+		o.max_states = 1000;
+		bool threw = false;
+		try {
+			solve_dp(p, nullptr, o);
+		} catch (const std::runtime_error &) {
+			threw = true;
+		}
+		CHECK(threw);
+	}
+}
