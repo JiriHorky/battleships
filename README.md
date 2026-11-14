@@ -68,11 +68,10 @@ kriznik  . # . # .     parnik  . # .
     place), and many partial layouts share the same state.
   * Every ship is grown by one cell right and down onto a (W+1)x(H+1) board.
     Two ships touch iff their grown shapes overlap, so the no-touch rule is a
-    single bitmask test. The mask only covers the cells ahead of the current
-    cell, up to a ship's farthest reach (57 cells on 10x10), so it fits in
-    64 bits; very wide boards use 128 bits. The grown cells left over also
-    give an exact bound on
-    wasted space, which prunes hopeless states early.
+    single bitmask test. The mask only covers the cells from the current one
+    up to a ship's farthest reach (57 cells on 10x10), so it fits in 64 bits;
+    very wide boards use 128 bits. The grown cells left over also give an
+    exact bound on wasted space, which prunes hopeless states early.
   * A forward pass (ways to reach each state) and a backward pass (ways to
     complete it) give exact per-placement and per-cell counts.
   * States are grouped by remaining fleet, which makes both passes
