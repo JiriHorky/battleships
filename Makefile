@@ -6,7 +6,7 @@ LIB_SRCS = src/core.cpp src/brute.cpp src/dp.cpp
 LIB_HDRS = $(wildcard src/*.h)
 TEST_SRCS = $(wildcard tests/*.cpp)
 
-all: $(OUTDIR)/main $(OUTDIR)/tests $(OUTDIR)/bench
+all: $(OUTDIR)/main $(OUTDIR)/tests $(OUTDIR)/bench $(OUTDIR)/play
 	@echo Compiled all executables
 
 $(OUTDIR):
@@ -22,9 +22,12 @@ $(OUTDIR)/tests: $(LIB_SRCS) $(LIB_HDRS) $(TEST_SRCS) tests/test_util.h | $(OUTD
 $(OUTDIR)/bench: $(LIB_SRCS) $(LIB_HDRS) src/bench.cpp | $(OUTDIR)
 	$(CXX) $(CXXFLAGS) $(LIB_SRCS) src/bench.cpp -o $@
 
-# Quick benchmark set (fast scenarios only).
+$(OUTDIR)/play: $(LIB_SRCS) $(LIB_HDRS) src/play.cpp | $(OUTDIR)
+	$(CXX) $(CXXFLAGS) $(LIB_SRCS) src/play.cpp -o $@
+
+# Benchmark set: legacy setups and the 10x10 game fleet from empty board to late game (fast scenarios only).
 bench: $(OUTDIR)/bench
-	./$(OUTDIR)/bench --repeat 3 legacy game-10x10-shots20 game-10x10-shots35 game-10x10-shots50
+	./$(OUTDIR)/bench --repeat 3 legacy game-
 
 test: $(OUTDIR)/tests
 	./$(OUTDIR)/tests

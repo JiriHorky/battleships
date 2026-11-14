@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
 #include <thread>
 
@@ -215,6 +216,10 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		L[0][full].fwd.push_back(1);
 	}
 
+	auto secs_since = [](std::chrono::steady_clock::time_point t) {
+		return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+	};
+	auto t_fwd = std::chrono::steady_clock::now();
 	// ---- Forward pass: build layer g+1 one destination group at a time. ----
 	std::vector<Accumulator<MT, CT>> acc(nthreads);
 	std::atomic<bool> ovf(false);
@@ -257,6 +262,8 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		if (ovf) return false;
 	}
 	std::vector<Accumulator<MT, CT>>().swap(acc);
+	if (stats) stats->forward_s = secs_since(t_fwd);
+	auto t_bwd = std::chrono::steady_clock::now();
 
 	// ---- Backward pass, accumulating per-placement weights per thread. ----
 	std::vector<std::vector<u128>> weight(nthreads, std::vector<u128>(p.placements.size(), 0));
@@ -320,6 +327,7 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		}
 	}
 	res.total = L[0][full].bwd.empty() ? 0 : L[0][full].bwd[0];
+	if (stats) stats->backward_s = secs_since(t_bwd);
 
 	for (size_t k = 0; k < p.placements.size(); k++) {
 		u128 w = 0;

@@ -1,61 +1,93 @@
 # Battleships
 
-A brute-force C++ solver that enumerates every valid placement of a fixed
-fleet of ships on a Battleship-style grid and computes, for each cell, how
-often it ends up occupied by a ship. The result is a heatmap of "hit
-probability" per cell, along with the total number of valid full-fleet
-placements.
+An exact solver for "where are the ships?" in Battleship-style games. Given a
+board, a fleet and the shots so far (misses, hits, sunk ships), it counts
+**every** fleet configuration consistent with the state and, for every cell,
+how many of those configurations have a ship there. That ratio is the exact
+hit probability for each cell.
+
+Rules: ships are polyominoes, may be rotated by 90° (optional), may not
+overlap and may not touch, not even diagonally. Identical ships are
+interchangeable, so swapping two identical ships is not a new configuration.
+
+## Build, test, benchmark
+
+Needs a C++17 compiler (Apple clang or GCC).
+
+```sh
+make             # builds bin/play, bin/bench, bin/tests and the original bin/main
+make test        # fast tests
+make test-all    # + slow test reproducing the original program's output (~15s)
+make bench       # benchmark scenarios (legacy + 10x10 game fleet)
+```
+
+## Playing
+
+```sh
+./bin/play examples/midgame.txt          # or pipe the state on stdin
+./bin/play --fleet czech state.txt       # other fleets: game (default), czech, legacy
+```
+
+State format, one line per row (spaces are ignored):
+
+| char | meaning |
+|---|---|
+| `.` | unknown |
+| `o` | miss |
+| `x` | hit |
+| `S` | cell of a sunk ship (the ship type is recognised by shape) |
+
+Output: a heatmap of hit probabilities in %, the number of consistent
+configurations, and the unknown cell most likely to hold a ship.
+
+## Fleets (`src/fleets.h`)
+
+| fleet | ships |
+|---|---|
+| `game` (default, 10x10) | 1 kriznik, 1 petka (5), 2 parnik (T), 3 dvojka (2), 5 jednicka (1) |
+| `czech` (stress test) | every ship from the original `main.cpp`: 14 ships, 40 cells |
+| `legacy` | the fleet active in the original `main()`: 5, 4, 3, 3, 1, 1, 1 |
+
+```
+kriznik  . # . # .     parnik  . # .
+         # # # # #             # # #
+```
 
 ## How it works
 
-- The board is a `WIDTH x HEIGHT` grid (9x8 by default, see constants in
-  `main.cpp`).
-- Each ship is defined by a shape (a bitmap over its bounding box), e.g. a
-  straight 1x1, 3x1, 4x1, or an L-shaped/cross-shaped multi-cell ship.
-- Standard Battleship adjacency rules apply: ships cannot touch each other,
-  not even diagonally. Each `ship` computes a "surrounding shape" mask used
-  to block adjacent cells once placed.
-- `place_ships` recursively tries every valid position for each ship in
-  turn (skipping placements that would overlap another ship or its
-  surrounding cells), backtracking after each attempt.
-- Whenever a full, valid placement of all ships is found, `add_frequencies`
-  increments a per-cell counter for every cell covered by a ship, and the
-  total placement count (`hits`) is incremented.
-- `shapes_map` deduplicates ships that share the same shape so that
-  identical ships are only tried in strictly increasing grid positions,
-  avoiding redundant permutations of otherwise-interchangeable ships.
+* `src/core.*`: the model. Builds the list of legal placements of every
+  remaining ship, after removing misses, sunk ships and their surroundings.
+* `src/brute.*`: plain backtracking over placements. Slow but obviously
+  correct; the tests use it as the reference.
+* `src/dp.*`: the fast exact solver, a frontier (transfer-matrix) dynamic
+  program:
+  * Cells are visited in row-major order and each ship is decided at its
+    first cell. The state is (cells ahead already taken, ships still to
+    place), and many partial layouts share the same state.
+  * Every ship is grown by one cell right and down onto a (W+1)x(H+1) board.
+    Two ships touch iff their grown shapes overlap, so one 64-bit mask encodes
+    the no-touch rule. The grown cells left over also give an exact bound on
+    wasted space, which prunes hopeless states early.
+  * A forward pass (ways to reach each state) and a backward pass (ways to
+    complete it) give exact per-placement and per-cell counts.
+  * States are grouped by remaining fleet, which makes both passes
+    parallel without locks.
+  * The board is transposed when that makes the frontier narrower.
+  * Counts are exact: 64-bit, retried in 128-bit on overflow.
 
-## Build
+The original solver is kept in `main.cpp` (`bin/main`) for reference. It only
+places ships in their given orientation and supports neither hits nor sunk
+ships.
 
-Requires `g++` with C++ support for `<bits/stdc++.h>` (GCC).
+## Performance (Apple M4 Pro, 12 threads)
 
-```sh
-make
-```
+| scenario | original `main.cpp` | now |
+|---|---|---|
+| legacy 9x8, fixed orientation | 8.0 s | 0.01–0.04 s |
+| game fleet 10x10, empty board (worst case) | — | 1.7 s, 4.8 GB |
+| game fleet 10x10, after 3 / 10 / 20 shots | — | 1.1 s / 0.07 s / 0.05 s |
+| czech fleet 10x10, empty board | — | 6.2 s, 16 GB |
 
-This produces `bin/main`.
-
-## Usage
-
-```sh
-./bin/main
-```
-
-The program prints:
-1. The empty grid (with cell indices) at startup.
-2. The frequency grid once the search completes — the number of valid
-   placements in which each cell was occupied by a ship.
-3. `Total hits: <N>` — the total number of valid full-fleet placements
-   found.
-
-## Configuring the fleet or board
-
-- Board size: adjust the `WIDTH` and `HEIGHT` macros near the top of
-  `main.cpp`.
-- Fleet composition: ships are constructed and pushed onto the `ships`
-  vector in `main()`. Comment/uncomment or add `ship_t` instances to change
-  which ships are placed. Each `ship_t` takes a name, bounding-box width and
-  height, and a row-major `vector<bool>` shape.
-
-Note: the search space grows very quickly with board size and fleet size,
-so larger configurations can take a long time to run.
+`./bin/bench` prints time, DP state counts, dead states, peak memory and
+forward/backward split; `./bin/bench --solver brute` runs the reference
+solver instead.

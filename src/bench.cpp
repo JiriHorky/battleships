@@ -52,6 +52,7 @@ int main(int argc, char ** argv) {
 		printf("%-24s %-6s %10.3f %12zu %12zu %12zu %9ld  %s\n", sc.name.c_str(), solver.c_str(), best, st.max_layer_states,
 		       st.total_states, st.dead_states, (long)(ru.ru_maxrss >> 20), to_string(r.total).c_str());
 		fflush(stdout);
+		if (solver != "brute") printf("    forward %.3fs  backward %.3fs%s\n", st.forward_s, st.backward_s, st.transposed ? "  (transposed)" : "");
 		if (show) print_heatmap(p, r, true);
 	}
 }

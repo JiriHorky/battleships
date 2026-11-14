@@ -32,6 +32,7 @@ struct DpStats {
 	size_t total_states = 0;
 	size_t dead_states = 0;  // states that cannot be completed (bwd == 0)
 	bool transposed = false;
+	double forward_s = 0, backward_s = 0;
 };
 
 struct DpOptions {
