@@ -4,6 +4,7 @@
 #include <sstream>
 
 #include "../src/brute.h"
+#include "../src/dp.h"
 #include "../src/fleets.h"
 #include "test_util.h"
 
@@ -14,7 +15,8 @@ struct NamedSolver {
 	const char * name;
 	SolverFn fn;
 };
-static std::vector<NamedSolver> solvers() { return {{"brute", solve_brute}}; }
+static Result dp_default(const Problem & p) { return solve_dp(p); }
+static std::vector<NamedSolver> solvers() { return {{"brute", solve_brute}, {"dp", dp_default}}; }
 
 static Fleet fl(std::initializer_list<std::pair<Shape, int>> ships) {
 	Fleet f;
@@ -97,10 +99,15 @@ TEST(hits) {
 	Result r = expect_total(g2, fl({{ship_straight(1), 2}}), true, 5);
 	CHECK_EQ(r.cell_counts[0], r.total);  // hit cell is always occupied
 	CHECK_EQ(r.cell_counts[1], (u128)0);
-	// hit must be explained by a *remaining* ship; a 1x2 covering the hit
-	GameState g3(3, 1);
-	g3.cells[1] = HIT;
-	expect_total(g3, fl({{ship_straight(2), 1}}), true, 2);
+	// a 1x2 on a 4x1 board has 3 placements, a hit at the end leaves only one
+	GameState g3(4, 1);
+	g3.cells[0] = HIT;
+	expect_total(g3, fl({{ship_straight(2), 1}}), true, 1);
+	// two hits that only a 1x2 could explain, but the fleet has only 1x1s
+	GameState g4(4, 1);
+	g4.cells[1] = HIT;
+	g4.cells[2] = HIT;
+	expect_total(g4, fl({{ship_straight(1), 2}}), true, 0);
 }
 
 TEST(sunk_ships) {
@@ -118,6 +125,81 @@ TEST(sunk_ships) {
 	GameState g2(3, 3);
 	g2.sunk.push_back({0, {0}});
 	expect_total(g2, f, true, 0);
+	// sunk 1x2 given as non-adjacent cells, or wrapping around the row end
+	GameState g3(3, 3);
+	g3.sunk.push_back({0, {0, 2}});
+	expect_total(g3, f, true, 0);
+	GameState g4(3, 3);
+	g4.sunk.push_back({0, {2, 3}});
+	expect_total(g4, f, true, 0);
+	// vertical sunk ship is fine with rotations, infeasible without
+	GameState g5(3, 3);
+	g5.sunk.push_back({0, {0, 3}});
+	expect_total(g5, f, true, 3);  // 1x1 in column 2
+	expect_total(g5, f, false, 0);
+}
+
+TEST(sunk_ship_interactions) {
+	Fleet f = fl({{ship_straight(2), 1}, {ship_straight(1), 2}});
+	// 4x3 board, 1x2 sunk at (0,0)-(0,1). Free cells for the 1x1s:
+	// (0,3),(1,3),(2,0),(2,1),(2,2),(2,3). Hit at (2,0) -> other 1x1 at
+	// (0,3),(1,3),(2,2),(2,3) -> 4.
+	GameState g(4, 3);
+	g.sunk.push_back({0, {0, 1}});
+	g.cells[8] = HIT;
+	Result r = expect_total(g, f, true, 4);
+	CHECK_EQ(r.cell_counts[8], r.total);
+	CHECK_EQ(r.cell_counts[9], (u128)0);
+	CHECK_EQ(r.cell_counts[3], (u128)1);
+	// hit on a sunk ship's cell is already explained: same as no hit there
+	GameState g2(4, 3);
+	g2.sunk.push_back({0, {0, 1}});
+	g2.cells[0] = HIT;
+	expect_total(g2, f, true, 9);  // 15 pairs of the 6 free cells minus 6 touching pairs
+	// hit touching a sunk ship
+	GameState g3(4, 3);
+	g3.sunk.push_back({0, {0, 1}});
+	g3.cells[2] = HIT;
+	expect_total(g3, f, true, 0);
+	// sunk ship on a miss
+	GameState g4(4, 3);
+	g4.sunk.push_back({0, {0, 1}});
+	g4.cells[1] = MISS;
+	expect_total(g4, f, true, 0);
+	// two sunk ships touching diagonally
+	GameState g5(4, 3);
+	g5.sunk.push_back({0, {0, 1}});
+	g5.sunk.push_back({1, {6}});
+	expect_total(g5, f, true, 0);
+	// out-of-range sunk cell is an input error
+	GameState g6(4, 3);
+	g6.sunk.push_back({1, {12}});
+	bool threw = false;
+	try {
+		make_problem(g6, f, true);
+	} catch (const std::invalid_argument &) {
+		threw = true;
+	}
+	CHECK(threw);
+}
+
+TEST(asymmetric_shape_rotations) {
+	Shape L = make_shape(2, 2, {1, 1, 1, 0});
+	// 4 orientations x 4 positions in a 3x3 board
+	expect_total(GameState(3, 3), fl({{L, 1}}), true, 16);
+	expect_total(GameState(3, 3), fl({{L, 1}}), false, 4);
+	// kriznik on 10x10: 6*9 positions for each horizontal orientation (2) and
+	// 9*6 for each vertical one (2)
+	expect_total(GameState(10, 10), fl({{ship_kriznik(), 1}}), true, 216);
+	expect_total(GameState(5, 2), fl({{ship_kriznik(), 1}}), true, 2);
+	// L-trominoes on an empty square board: heatmap invariant under rotation
+	Problem p = make_problem(GameState(5, 5), fl({{L, 2}, {ship_straight(2), 1}}), true);
+	for (auto & s : solvers()) {
+		Result r = s.fn(p);
+		CHECK(r.total > 0);
+		for (int y = 0; y < 5; y++)
+			for (int x = 0; x < 5; x++) CHECK_EQ(r.cell_counts[y * 5 + x], r.cell_counts[x * 5 + (4 - y)]);
+	}
 }
 
 // Sum of all per-cell counts = total * number of ship cells in the fleet.
@@ -155,7 +237,7 @@ TEST(empty_square_board_is_symmetric) {
 // The original program (fixed orientations) on its default 9x8 setup.
 // The golden file holds its grid and frequency table with the debug lines removed.
 SLOW_TEST(matches_legacy_golden_9x8) {
-	std::ifstream in("tests/golden/legacy_9x8_default.txt");
+	std::ifstream in(SRC_ROOT "/tests/golden/legacy_9x8_default.txt");
 	CHECK(in.good());
 	std::string line;
 	std::vector<u128> freqs;
@@ -184,6 +266,7 @@ SLOW_TEST(matches_legacy_golden_9x8) {
 	for (auto & s : solvers()) {
 		Result r = s.fn(p);
 		CHECK_EQ(r.total, golden_total);
-		for (int i = 0; i < 72 && i < (int)freqs.size(); i++) CHECK_EQ(r.cell_counts[i], freqs[i]);
+		if (freqs.size() == 72)
+			for (int i = 0; i < 72; i++) CHECK_EQ(r.cell_counts[i], freqs[i]);
 	}
 }

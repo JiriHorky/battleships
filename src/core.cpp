@@ -112,8 +112,20 @@ Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate) {
 	for (const auto & s : gs.sunk) {
 		if (s.type < 0 || s.type >= (int)p.types.size()) throw std::invalid_argument("bad sunk type");
 		Mask m = 0;
-		for (int c : s.cells) m |= bit(c);
-		if (popcount(m) != p.types[s.type].shape.size()) p.infeasible = true;
+		for (int c : s.cells) {
+			if (c < 0 || c >= p.N) throw std::invalid_argument("sunk ship cell out of range");
+			m |= bit(c);
+		}
+		// the cells must form the declared ship in one of its allowed orientations
+		bool shape_ok = false;
+		for (const auto & o : orientations(p.types[s.type].shape, rotate))
+			for (int r = 0; r + o.h <= p.H && !shape_ok; r++)
+				for (int c = 0; c + o.w <= p.W && !shape_ok; c++) {
+					Mask om;
+					shape_mask(p.W, p.H, o, r, c, om);
+					shape_ok = om == m && popcount(m) == (int)s.cells.size();
+				}
+		if (!shape_ok) p.infeasible = true;
 		if (m & forbidden) p.infeasible = true;  // sunk ship on a miss
 		if (--p.types[s.type].count < 0) p.infeasible = true;
 		Mask h = halo_of(p.W, p.H, m);
