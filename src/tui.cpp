@@ -359,6 +359,10 @@ static std::string render_board(const App & a, bool square, bool fresh, bool sta
 		if (r == a.cr) {
 			gaps[a.cc] = gaps2[a.cc] = "\x1b[1;38;5;231m\u2590\x1b[0m";      // right half block
 			gaps[a.cc + 1] = gaps2[a.cc + 1] = "\x1b[1;38;5;231m\u258c\x1b[0m";  // left half block
+			// best shot just right of the cursor: its '*' slot holds the cursor bar,
+			// so mark it on the lower line, right of the cell
+			if (best >= 0 && best / b.W == r && best % b.W == a.cc + 1)
+				gaps2[a.cc + 2] = "\x1b[1;38;5;226m*\x1b[0m";
 		}
 		std::string top = lbl, bot = "     ";
 		for (int c = 0; c < b.W; c++) {
@@ -379,29 +383,43 @@ static int term_rows() {
 }
 
 static std::string build_frame(const App & a, bool square);
+static int g_spin = 0;
+
+// Terminal rows a frame occupies, counting lines that wrap.
+static int frame_rows(const std::string & f, int cols) {
+	int rows = 0, w = 0;
+	for (size_t i = 0; i < f.size(); i++) {
+		unsigned char ch = f[i];
+		if (ch == 27) {  // skip CSI sequence
+			while (++i < f.size() && !((f[i] >= 'A' && f[i] <= 'Z') || (f[i] >= 'a' && f[i] <= 'z'))) {
+			}
+		} else if (ch == '\n') {
+			rows += w > 0 ? (w + cols - 1) / cols : 1;
+			w = 0;
+		} else if ((ch & 0xC0) != 0x80) {
+			w++;  // one column per UTF-8 character
+		}
+	}
+	return rows;
+}
 
 // Square cells when the user wants them and they fit; never more lines than
 // the terminal has, or it would scroll and the next redraw would be garbled.
 static void draw(const App & a) {
-	int rows = term_rows();
-	auto lines = [](const std::string & f) {
-		size_t n = 0;
-		for (char ch : f) n += ch == '\n';
-		return (int)n;
-	};
+	int rows = term_rows(), cols = term_cols();
+	g_spin++;
+	auto lines = [cols](const std::string & f) { return frame_rows(f, cols); };
 	std::string f = build_frame(a, a.square);
 	if (a.square && lines(f) > rows - 1) f = build_frame(a, false);
-	if (lines(f) > rows - 1) {
-		size_t pos = 0;
-		for (int k = 0; k < rows - 1 && pos != std::string::npos; k++) pos = f.find('\n', pos) + 1;
-		if (pos != std::string::npos && pos > 0) f.resize(pos);
+	while (lines(f) > rows - 1 && f.size() > 1) {
+		size_t e = f.rfind('\n', f.size() - 2);  // drop the last line
+		f.resize(e == std::string::npos ? 0 : e + 1);
 	}
 	term_write("\x1b[H" + f + "\x1b[J");
 }
 
 static std::string build_frame(const App & a, bool square) {
 	static const char * SPIN = "|/-\\";
-	static int spin = 0;
 	const Board & b = a.board;
 	bool fresh = a.fresh() && a.last.ok;
 	bool stale_numbers = a.have_last && a.last.ok && !fresh;
@@ -428,7 +446,7 @@ static std::string build_frame(const App & a, bool square) {
 	if (!a.shape_error.empty()) {
 		s += " \x1b[1;31m" + a.shape_error + "\x1b[0m\x1b[K\n\x1b[K\n";
 	} else if (a.computing() && !fresh) {
-		s += std::string(" computing ") + SPIN[spin++ % 4] + "\x1b[K\n\x1b[K\n";
+		s += std::string(" computing ") + SPIN[g_spin % 4] + "\x1b[K\n\x1b[K\n";
 	} else if (a.have_last && !a.last.ok && a.last.gen == a.gen) {
 		s += " \x1b[1;31m" + a.last.error + "\x1b[0m\x1b[K\n\x1b[K\n";
 	} else if (fresh) {
@@ -449,7 +467,7 @@ static std::string build_frame(const App & a, bool square) {
 	}
 	s += " " + a.message + "\x1b[K\n\x1b[K\n";
 	s += " \x1b[2marrows/hjkl move   x hit   o miss   s sunk (toggle hit group)   space clear\x1b[0m\x1b[K\n";
-	s += " \x1b[2mb/enter best shot   u undo   r reset   v view   w save to " + a.file + "   q quit\x1b[0m\x1b[K\n";
+	s += " \x1b[2mb/enter best shot   u undo   r reset   v view   w save   q quit\x1b[0m\x1b[K\n";
 	// put the fleet panel to the right of the board if it fits, else below
 	int pw = 0;
 	std::vector<std::string> panel = fleet_panel(a, pw);
