@@ -134,10 +134,10 @@ ships.
 
 | scenario | original `main.cpp` | now |
 |---|---|---|
-| legacy 9x8, fixed orientation | 8.0 s | 0.04 s |
-| game fleet 10x10, empty board (worst case) | — | 0.45 s, 0.3 GB |
-| game fleet 10x10, after 3 / 10 / 20 shots | — | 0.3 s / 0.05 s / 0.05 s |
-| czech fleet 10x10, empty board | — | 1.3 s, 0.9 GB |
+| legacy 9x8, fixed orientation | 8.0 s | 0.015 s |
+| game fleet 10x10, empty board (worst case) | — | 0.39 s, 0.33 GB |
+| game fleet 10x10, after 3 / 10 / 20 / 50 shots | — | 0.26 s / 0.03 s / 0.02 s / 0.001 s |
+| czech fleet 10x10, empty board | — | 1.25 s, 0.95 GB |
 
 `./bin/bench` prints time, DP state counts, dead states, peak memory and
 forward/backward split; `./bin/bench --solver brute` runs the reference

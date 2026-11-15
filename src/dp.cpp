@@ -103,9 +103,15 @@ struct MaskIndex {
 	}
 };
 
-// Growable mask -> count accumulator used while building one group.
+// Mask -> count accumulator used while building one group. Most states
+// arrive in increasing mask order (the no-ship transition of sorted sources):
+// those are appended to a sorted run without hashing. The rest (ship
+// placements, and the few states canonicalization moved out of order) go to a
+// hash table, which is sorted and merged into the run at the end.
 template <typename MT, typename CT>
 struct Accumulator {
+	std::vector<MT> run_m;  // strictly increasing
+	std::vector<CT> run_v;
 	std::vector<uint32_t> slots;
 	uint64_t mod = 0;
 	std::vector<MT> masks;
@@ -123,16 +129,21 @@ struct Accumulator {
 		mod = slots.size() - 1;
 		masks.clear();
 		vals.clear();
+		run_m.clear();
+		run_v.clear();
 		reported = 0;
 	}
+	size_t size() const { return run_m.size() + masks.size(); }  // upper bound on distinct states
 	// Adds this group's not-yet-reported states to the shared counter, so
-	// in-progress groups of all threads count against the budget.
+	// in-progress groups of all threads count against the budget. size() can
+	// count a mask twice (in the run and the table), so the budget is only
+	// enforced on the merged size in take_sorted(); until then it can be
+	// exceeded by at most one group per thread.
 	void report() {
 		if (!stored) return;
-		const size_t add = (masks.size() - reported) * (sizeof(MT) + sizeof(CT));
-		size_t total = stored->fetch_add(add) + add;
-		reported = masks.size();
-		if (total > budget) throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
+		const size_t n = size();
+		stored->fetch_add((n - reported) * (sizeof(MT) + sizeof(CT)));
+		reported = n;
 	}
 	void grow() {
 		slots.assign(slots.size() * 2, EMPTY);
@@ -144,27 +155,58 @@ struct Accumulator {
 		}
 	}
 	// Moves the accumulated states into g, sorted by mask (packing needs
-	// that). The first `nsorted` states were inserted in increasing mask
-	// order, so only the rest is sorted, then the two runs are merged.
+	// that): the hashed states are sorted and merged with the run; a mask in
+	// both has its counts added.
 	template <typename G>
-	void take_sorted(G & g, size_t nsorted) {
-		const size_t n = masks.size();
-		tail.resize(n - nsorted);
-		for (size_t i = nsorted; i < n; i++) tail[i - nsorted] = {masks[i], vals[i]};
+	void take_sorted(G & g) {
+		const size_t nr = run_m.size(), nt = masks.size();
+		tail.resize(nt);
+		for (size_t i = 0; i < nt; i++) tail[i] = {masks[i], vals[i]};
 		std::sort(tail.begin(), tail.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
-		g.mask.resize(n);
-		g.fwd.resize(n);
-		size_t i = 0, j = 0;
-		for (size_t o = 0; o < n; o++) {  // masks are distinct: no ties
-			if (j == tail.size() || (i < nsorted && masks[i] < tail[j].first)) {
-				g.mask[o] = masks[i];
-				g.fwd[o] = vals[i++];
-			} else {
+		g.mask.resize(nr + nt);
+		g.fwd.resize(nr + nt);
+		size_t i = 0, j = 0, o = 0;
+		while (i < nr || j < nt) {
+			if (j == nt || (i < nr && run_m[i] < tail[j].first)) {
+				g.mask[o] = run_m[i];
+				g.fwd[o++] = run_v[i++];
+			} else if (i == nr || tail[j].first < run_m[i]) {
 				g.mask[o] = tail[j].first;
-				g.fwd[o] = tail[j++].second;
+				g.fwd[o++] = tail[j++].second;
+			} else {
+				g.mask[o] = run_m[i];
+				g.fwd[o] = run_v[i++];
+				ovf |= add_ovf(g.fwd[o++], tail[j++].second);
+			}
+		}
+		g.mask.resize(o);
+		g.fwd.resize(o);
+		// Settle the budget on the merged size (a mask in both the run and the
+		// table was counted twice so far), then check it.
+		if (stored) {
+			const size_t sz = sizeof(MT) + sizeof(CT);
+			if (o >= reported) {
+				const size_t total = stored->fetch_add((o - reported) * sz) + (o - reported) * sz;
+				reported = o;
+				if (total > budget) throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
+			} else {
+				*stored -= (reported - o) * sz;
+				reported = o;
 			}
 		}
 		if (tail.capacity() > (1u << 20)) std::vector<std::pair<MT, CT>>().swap(tail);
+	}
+	// A state expected to come in increasing mask order.
+	inline void add_run(MT m, CT v) {
+		if (run_m.empty() || m > run_m.back()) {
+			run_m.push_back(m);
+			run_v.push_back(v);
+			if ((run_m.size() & 4095) == 0) report();
+		} else if (m == run_m.back()) {
+			ovf |= add_ovf(run_v.back(), v);
+		} else {
+			add(m, v);
+		}
 	}
 	inline void add(MT m, CT v) {
 		for (uint64_t s = hash_mask(m) & mod;; s = (s + 1) & mod) {
@@ -324,15 +366,23 @@ struct Lookahead {
 						if ((nsub == 1 || (sub >> t) & 1) && last[t][z] >= g) V[(size_t)g * nsub + sub] |= (MT)1 << j;
 			}
 	}
+	// Everything canon() needs for one layer and set of ship types left, held
+	// in registers by the hot loops instead of being reloaded per call.
+	struct Ctx {
+		MT V, H, R, top1, topW, topW1;
+		int GW;
+	};
+	Ctx ctx(int g, uint32_t sub) const { return Ctx{V[(size_t)g * nsub + sub], H[g], R[g], top1, topW, topW1, GW}; }
 	// Canonicalizes mask m of layer g in place; false if the state is dead.
-	inline bool canon(int g, uint32_t sub, MT & m) const {
+	static inline bool canon(const Ctx & c, MT & m) {
 		const MT F = ~m;
-		const MT P = V[(size_t)g * nsub + sub] & F & ((F >> 1) | top1) & ((F >> GW) | topW) & ((F >> (GW + 1)) | topW1);
-		if (H[g] & F & ~P) return false;
-		const MT C = P | (P << 1) | (P << GW) | (P << (GW + 1));
-		m |= R[g] & ~C;
+		const MT P = c.V & F & ((F >> 1) | c.top1) & ((F >> c.GW) | c.topW) & ((F >> (c.GW + 1)) | c.topW1);
+		if (c.H & F & ~P) return false;
+		const MT C = P | (P << 1) | (P << c.GW) | (P << (c.GW + 1));
+		m |= c.R & ~C;
 		return true;
 	}
+	bool canon(int g, uint32_t sub, MT & m) const { return canon(ctx(g, sub), m); }
 };
 
 // Returns false if CT overflowed (caller retries with a wider type).
@@ -424,27 +474,33 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		a.stored = &stored;
 		a.budget = budget;
 	}
+	// States per layer. Layers this small are handled by the calling thread
+	// alone: waking the workers would cost more than the work.
+	std::vector<size_t> nstates(G + 1, 0);
+	nstates[0] = L[0][full].mask.size();
+	constexpr size_t SERIAL_BELOW = 1 << 14;
+	auto threads_for = [&](size_t states) { return states < SERIAL_BELOW ? 1 : nthreads; };
 	for (int g = 0; g < G; g++) {
 		auto & cur = L[g];
 		auto & nxt = L[g + 1];
 		const bool h = hit[g];
-		parallel_for(nthreads, nfleet, [&](size_t di, int tid) {
+		const int th = threads_for(nstates[g]);
+		std::atomic<size_t> made(0);
+		parallel_for(th, nfleet, [&](size_t di, int tid) {
 			const uint32_t d = (uint32_t)di;
 			if (!viable(g + 1, 0, d)) return;
 			Accumulator<MT, CT> & A = acc[tid];
 			A.reset();
-			// no ship anchored here
+			const auto cx = la.ctx(g + 1, left[d]);
+			// no ship anchored here: sources are sorted by mask and m -> m >> 1
+			// keeps the order; canonicalization moves a few states out of it
 			const auto & same = cur[d];
 			for (size_t s = 0; s < same.mask.size(); s++) {
 				MT m = same.mask[s];
 				if (!(m & 1) && h) continue;  // an uncovered hit must be covered now
 				MT m2 = m >> 1;
-				if (la.canon(g + 1, left[d], m2) && viable(g + 1, m2, d)) A.add(m2, same.fwd[s]);
+				if (la.canon(cx, m2) && viable(g + 1, m2, d)) A.add_run(m2, same.fwd[s]);
 			}
-			// Sources are sorted by mask and m -> m >> 1 keeps the order, but
-			// canonicalization can break it (and merge states), so only the
-			// prefix that actually came out sorted is treated as such.
-			const size_t nsorted = std::is_sorted_until(A.masks.begin(), A.masks.end()) - A.masks.begin();
 			// a ship of type t anchored here
 			for (int t : feeders[d]) {
 				const auto & trs = at[g][t];
@@ -456,17 +512,18 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 					for (const auto & tr : trs) {
 						if (tr.grown & m) continue;
 						MT m2 = (m | tr.grown) >> 1;
-						if (la.canon(g + 1, left[d], m2) && viable(g + 1, m2, d)) A.add(m2, src.fwd[s]);
+						if (la.canon(cx, m2) && viable(g + 1, m2, d)) A.add(m2, src.fwd[s]);
 					}
 				}
 			}
+			A.take_sorted(nxt[d]);
 			if (A.ovf) ovf = true;
-			A.report();
-			A.take_sorted(nxt[d], nsorted);
+			made += nxt[d].mask.size();
 		});
+		nstates[g + 1] = made;
 		if (ovf) return false;
 		// layer g has been read for the last time in this pass: pack it
-		parallel_for(nthreads, nfleet, [&](size_t fi, int tid) {
+		parallel_for(th, nfleet, [&](size_t fi, int tid) {
 			const size_t plain = cur[fi].mask.size() * (sizeof(MT) + sizeof(CT));
 			cur[fi].pack(packbuf[tid]);
 			stored += cur[fi].packed.size();
@@ -488,12 +545,13 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		grp.bwd.assign(grp.mask.size(), f == 0 ? 1 : 0);
 		grp.index.build(grp.mask);
 	}
+	std::vector<std::vector<typename Lookahead<MT>::Ctx>> cxbuf(nthreads, std::vector<typename Lookahead<MT>::Ctx>(1 + T));
 	for (int g = G - 1; g >= 0; g--) {
 		auto & cur = L[g];
 		auto & nxt = L[g + 1];
 		const bool h = hit[g];
 		std::atomic<size_t> a_states(0), a_dead(0);
-		parallel_for(nthreads, nfleet, [&](size_t fi, int tid) {
+		parallel_for(threads_for(nstates[g]), nfleet, [&](size_t fi, int tid) {
 			const uint32_t f = (uint32_t)fi;
 			auto & grp = cur[f];
 			// Layers below G are packed: decode the masks (kept: layer g+1
@@ -505,8 +563,14 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 			grp.bwd.resize(n);
 			// destination masks are looked up in the same canonical form the
 			// forward pass stored them in
-			auto get = [&](uint32_t f2, MT m) -> CT {
-				if (!la.canon(g + 1, left[f2], m)) return 0;
+			// canon() contexts, held in registers: [0] no ship placed (fleet f),
+			// [1 + t] a ship of type t placed (fleet f - stride[t])
+			auto & cx = cxbuf[tid];
+			cx[0] = la.ctx(g + 1, left[f]);
+			for (int t = 0; t < T; t++)
+				if (digit(f, t)) cx[1 + t] = la.ctx(g + 1, left[f - stride[t]]);
+			auto get = [&](uint32_t f2, const typename Lookahead<MT>::Ctx & c, MT m) -> CT {
+				if (!Lookahead<MT>::canon(c, m)) return 0;
 				const auto & ng = nxt[f2];
 				uint32_t idx = ng.index.find(ng.mask, m);
 				return idx == EMPTY ? 0 : ng.bwd[idx];
@@ -519,13 +583,13 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 				rd.next(m, fw);
 				grp.mask[s] = m;
 				CT b = 0;
-				if ((m & 1) || !h) b = get(f, m >> 1);
+				if ((m & 1) || !h) b = get(f, cx[0], m >> 1);
 				if (!(m & 1)) {
 					for (int t = 0; t < T; t++) {
 						if (digit(f, t) == 0) continue;
 						for (const auto & tr : at[g][t]) {
 							if (tr.grown & m) continue;
-							CT b2 = get(f - stride[t], (m | tr.grown) >> 1);
+							CT b2 = get(f - stride[t], cx[1 + t], (m | tr.grown) >> 1);
 							if (!b2) continue;
 							if (add_ovf(b, b2)) ovf = true;
 							W[tr.pidx] += (u128)fw * (u128)b2;
@@ -542,7 +606,7 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		});
 		if (ovf) return false;
 		// layer g+1 is no longer needed; index layer g for the next step
-		parallel_for(nthreads, nfleet, [&](size_t fi, int) {
+		parallel_for(threads_for(std::max(nstates[g], nstates[g + 1])), nfleet, [&](size_t fi, int) {
 			nxt[fi] = Group<MT, CT>();
 			if (!cur[fi].mask.empty()) cur[fi].index.build(cur[fi].mask);
 		});

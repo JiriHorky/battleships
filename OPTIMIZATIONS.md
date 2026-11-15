@@ -86,6 +86,57 @@ prefix of that run and sorts the rest. 2.5–4x faster than the baseline on the
 big boards and 12–17x less memory; slightly slower than lookahead alone
 (5–20 %), in exchange for ~4.6x less memory.
 
+## Micro-optimizations (profiling pass)
+
+Profiled with `sample` and by switching off parts of the hot loops one at a
+time (single thread, game fleet, empty 10x10). Time is spread over the
+backward loop (45 %), the forward loop and its hash inserts (35 %), building
+the backward index (8 %), packing and sorting (8 %). Per state the work is a
+varint decode, ~1.4 `canon()` calls and ~1.4 random hash accesses, about
+20 ns in total: no single instruction dominates.
+
+Kept:
+
+* **Persistent thread pool** (`src/parallel.h`). The DP runs four parallel
+  loops per board cell, and starting threads for each one cost ~20–40 ms per
+  solve whatever its size. Workers now spin briefly, then sleep; a solve
+  that finds the pool busy (the TUI can overlap solves) starts its own
+  threads as before.
+* **Small layers on the calling thread.** Layers under 16k states are not
+  worth waking the workers for.
+* **`canon()` context hoisted.** Its per-layer constants are loaded once per
+  group into a small struct that stays in registers, not reloaded per call.
+* **Sorted run in the forward accumulator.** 87 % of states have their
+  current cell already taken and make only the "no ship" transition, whose
+  output comes in mask order: on the empty board 68M of the 80M no-ship
+  candidates (85 %) extend the run, 7.4M repeat its last mask and 3.9M (5 %)
+  are out of order. In-order states are appended to a sorted run without
+  hashing; only ship placements and out-of-order states go to the hash
+  table, which is sorted and merged into the run at the end. The memory
+  budget is checked on the merged size.
+
+| scenario | before | after |
+|---|---|---|
+| game fleet, empty 10x10 | 0.43 s | 0.38–0.39 s |
+| game fleet, 3 / 10 / 20 / 50 shots | 0.31 / 0.053 / 0.047 / 0.037 s | 0.26 / 0.030 / 0.022 / 0.001 s |
+| czech fleet, empty 10x10 | 1.33–1.39 s | 1.24–1.28 s |
+
+Big boards gain 5–10 %; mid and late game, where thread start-up dominated,
+1.2–37x (the legacy 9x8 setups in the README went from 0.04 s to 0.015 s for
+the same reason). Peak memory on the game fleet rose from ~0.30 to ~0.33 GB.
+
+Tried and not kept:
+
+* **Backward table with mask and count in one slot**, filled during the pass
+  (no separate index build), lookups computed for a batch of 32 states and
+  prefetched before probing, branch-free candidate filtering: no measurable
+  change at load factor 2/3 against the existing index. A tighter table
+  (load 0.8) saved memory but was ~10 % slower.
+* **SIMD / inline assembly:** the hot code is a dozen 64-bit bit operations
+  next to dependent random memory accesses; 2-lane NEON cannot beat the
+  scalar units on that, and once its constants stay in registers `canon()` is
+  not the bottleneck.
+
 ## Ideas evaluated earlier and not built
 
 * **Precomputed tables (up to 100 GB):** the answer depends on every shot on
