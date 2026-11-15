@@ -12,6 +12,10 @@
 //   * HIT   - cell known to be a ship cell (which ship is unknown),
 //   * sunk ships - exact placement known; the ship is removed from the fleet
 //     and its cells + surroundings become unavailable to the other ships.
+//
+// With sunk_announced (the usual game rule: the opponent says "sunk" when the
+// last cell of a ship is hit), a hit that is not marked sunk belongs to a ship
+// that still has an unhit cell, so placements made only of hits are dropped.
 #pragma once
 
 #include <cstdint>
@@ -83,7 +87,7 @@ struct Problem {
 	std::string infeasible_reason;  // first contradiction found, if any
 };
 
-Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate);
+Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate, bool sunk_announced = false);
 
 struct Result {
 	u128 total = 0;                // number of consistent configurations

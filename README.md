@@ -9,6 +9,9 @@ hit probability for each cell.
 Rules: ships are polyominoes, may be rotated by 90° (optional), may not
 overlap and may not touch, not even diagonally. Identical ships are
 interchangeable, so swapping two identical ships is not a new configuration.
+Sinking is announced: a hit not marked sunk belongs to a ship that still has
+an unhit cell (`--no-sunk-announce` turns this off). The TUI marks a hit
+group sunk by itself when only a whole ship fits it.
 
 ## Build, test, benchmark
 

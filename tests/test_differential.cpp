@@ -76,7 +76,7 @@ TEST(dp_matches_brute_random) {
 		int ntypes = 1 + rng() % 3;
 		for (int t = 0; t < ntypes; t++) f.push_back({"t", random_shape(rng), 1 + (int)(rng() % 3)});
 		GameState gs = iter % 3 == 0 ? GameState(W, H) : random_state(rng, W, H, f, rotate);
-		Problem p = make_problem(gs, f, rotate);
+		Problem p = make_problem(gs, f, rotate, /*sunk_announced=*/iter % 2 == 1);
 		Result a = solve_brute(p);
 		Result b = solve_dp(p);
 		if (a.total) feasible++;

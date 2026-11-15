@@ -1,7 +1,7 @@
 // Interactive terminal UI: mark shots on the board, see the hit probabilities
 // recomputed after every change.
 //
-// usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--threads N] [state-file]
+// usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--no-sunk-announce] [--threads N] [state-file]
 //
 // Keys:
 //   arrows / hjkl   move                 x  hit           o  miss
@@ -11,6 +11,10 @@
 //   u               undo                 r  reset board
 //   w               save to the state file (same format as bin/play reads)
 //   q               quit
+//
+// Sinking is assumed to be announced (--no-sunk-announce drops this): a hit
+// not marked sunk belongs to a ship with an unhit cell left. A hit group that
+// can only be a whole ship is therefore sunk, and is marked so automatically.
 //
 // The solver runs in a background thread, so the cursor keeps moving while a
 // slow position (e.g. the empty 10x10 board, ~0.5 s) is being computed.
@@ -119,21 +123,54 @@ struct Outcome {
 	Problem p;
 	Result r;
 	double secs = 0;
+	// Hit groups that are whole ships in every configuration; set only when
+	// that is why no configuration fits (they would have been announced sunk).
+	std::vector<std::vector<int>> sink;
+	std::string hint;  // shown with the error
 };
 
-static Outcome compute(uint64_t gen, Board b, Fleet fleet, bool rotate, DpOptions opt) {
+// Hit groups (8-connected x cells, always one ship) with no ship cell next to
+// them in any configuration of r: each is exactly one whole ship.
+static std::vector<std::vector<int>> whole_ships(const Board & b, const Result & r) {
+	std::vector<std::vector<int>> out;
+	std::vector<uint8_t> seen(b.W * b.H, 0);
+	for (int i = 0; i < b.W * b.H; i++) {
+		if (b.cells[i] != 'x' || seen[i]) continue;
+		std::vector<int> g = component(b, i);
+		Mask m = 0;
+		for (int x : g) {
+			seen[x] = 1;
+			m |= bit(x);
+		}
+		Mask around = halo_of(b.W, b.H, m) & ~m;
+		bool closed = true;
+		for (int x = 0; x < b.W * b.H && closed; x++)
+			if ((around & bit(x)) && r.cell_counts[x] != 0) closed = false;
+		if (closed) out.push_back(g);
+	}
+	return out;
+}
+
+static Outcome compute(uint64_t gen, Board b, Fleet fleet, bool rotate, bool announced, DpOptions opt) {
 	Outcome o;
 	o.gen = gen;
 	try {
 		auto t0 = std::chrono::steady_clock::now();
 		GameState gs = board_to_state(b, fleet, rotate);
-		o.p = make_problem(gs, fleet, rotate);
+		o.p = make_problem(gs, fleet, rotate, announced);
 		o.r = solve_dp(o.p, nullptr, opt);
+		if (o.r.total == 0 && announced && !o.p.infeasible) {
+			// Without the rule, which hit groups are certainly whole ships?
+			Result loose = solve_dp(make_problem(gs, fleet, rotate, false), nullptr, opt);
+			if (loose.total) o.sink = whole_ships(b, loose);
+			if (loose.total && o.sink.empty()) o.hint = "if a ship was announced sunk, press s on it";
+		}
 		o.secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 		o.ok = o.r.total != 0;
 		if (!o.ok)
 			o.error = "no fleet configuration fits this board" +
-			          (o.p.infeasible ? ": " + o.p.infeasible_reason : std::string());
+			          (o.p.infeasible ? ": " + o.p.infeasible_reason : std::string()) +
+			          (o.hint.empty() ? std::string() : " (" + o.hint + ")");
 	} catch (const std::exception & e) {
 		o.error = e.what();
 	}
@@ -142,9 +179,14 @@ static Outcome compute(uint64_t gen, Board b, Fleet fleet, bool rotate, DpOption
 
 // ---------------------------------------------------------------- UI
 
+static std::string col_name(int c) {
+	return c < 26 ? std::string(1, (char)('A' + c)) : std::to_string(c + 1);
+}
+
 struct App {
 	Fleet fleet;
 	bool rotate = true;
+	bool announced = true;  // sinking is announced (see the top of the file)
 	DpOptions opt;
 	std::string file;
 	bool square = true;     // square cells (falls back to compact if the terminal is short)
@@ -163,11 +205,12 @@ struct App {
 	std::vector<int> sunk_count;  // per fleet type, from the current board
 
 	bool computing() const { return job.valid(); }
+	std::string cell_name(int i) const { return col_name(i % board.W) + std::to_string(i / board.W + 1); }
 	bool fresh() const { return have_last && last.gen == gen; }
 
 	void start_job() {
 		try {
-			job = std::async(std::launch::async, compute, gen, board, fleet, rotate, opt);
+			job = std::async(std::launch::async, compute, gen, board, fleet, rotate, announced, opt);
 		} catch (const std::exception & e) {
 			message = std::string("cannot start the solver: ") + e.what();
 		}
@@ -202,6 +245,18 @@ struct App {
 		if (!computing() || job.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
 		last = job.get();
 		have_last = true;
+		if (last.gen == gen && !last.sink.empty()) {
+			// Part of the edit that completed the ship, so no undo entry: undo
+			// goes back to before that hit.
+			std::string where;
+			for (const auto & g : last.sink) {
+				for (int x : g) board.cells[x] = 'S';
+				where += (where.empty() ? "" : ", ") + cell_name(g[0]);
+			}
+			message = "marked sunk, only a whole ship fits there: " + where;
+			changed();
+			return true;
+		}
 		if (last.gen != gen && shape_error.empty()) start_job();
 		return true;
 	}
@@ -216,9 +271,6 @@ struct App {
 	}
 };
 
-static std::string col_name(int c) {
-	return c < 26 ? std::string(1, (char)('A' + c)) : std::to_string(c + 1);
-}
 
 // heat ramp (xterm-256 backgrounds), cold to hot
 static const int RAMP[] = {236, 237, 23, 24, 30, 36, 72, 108, 143, 179, 215, 209, 203, 197};
@@ -304,6 +356,7 @@ static Look cell_look(const App & a, int i, bool fresh, bool stale_numbers, doub
 	char buf[8];
 	if (cnt == 0) snprintf(buf, sizeof buf, " . ");
 	else if (pr < 0.005) snprintf(buf, sizeof buf, " <1");
+	else if (cnt != a.last.r.total && pr >= 0.995) snprintf(buf, sizeof buf, ">99");  // "100" means certain
 	else snprintf(buf, sizeof buf, "%3.0f", 100 * pr);
 	if (!fresh) return {235, 242, false, buf};  // out of date: greyed out
 	if (cnt == 0) return {234, 240, false, buf};
@@ -549,6 +602,7 @@ int main(int argc, char ** argv) {
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--fleet") && i + 1 < argc) fleet_name = argv[++i];
 		else if (!strcmp(argv[i], "--no-rotate")) a.rotate = false;
+		else if (!strcmp(argv[i], "--no-sunk-announce")) a.announced = false;
 		else if (!strcmp(argv[i], "--threads") && i + 1 < argc) a.opt.threads = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--size") && i + 1 < argc) {
 			if (sscanf(argv[++i], "%dx%d", &W, &H) != 2 || W < 1 || H < 1 || W * H > 128) {
@@ -556,10 +610,10 @@ int main(int argc, char ** argv) {
 				return 1;
 			}
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-			printf("usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--threads N] [state-file]\n");
+			printf("usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--no-sunk-announce] [--threads N] [state-file]\n");
 			return 0;
 		} else if (argv[i][0] == '-') {
-			fprintf(stderr, "usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--threads N] [state-file]\n");
+			fprintf(stderr, "usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--no-sunk-announce] [--threads N] [state-file]\n");
 			return 1;
 		} else a.file = argv[i];
 	}

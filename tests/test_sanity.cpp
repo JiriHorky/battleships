@@ -26,8 +26,9 @@ static Fleet fl(std::initializer_list<std::pair<Shape, int>> ships) {
 }
 
 // Check total for every solver; returns the brute-force result for further checks.
-static Result expect_total(const GameState & gs, const Fleet & f, bool rotate, u128 expected) {
-	Problem p = make_problem(gs, f, rotate);
+static Result expect_total(const GameState & gs, const Fleet & f, bool rotate, u128 expected,
+                           bool sunk_announced = false) {
+	Problem p = make_problem(gs, f, rotate, sunk_announced);
 	Result first;
 	for (auto & s : solvers()) {
 		Result r = s.fn(p);
@@ -108,6 +109,24 @@ TEST(hits) {
 	g4.cells[1] = HIT;
 	g4.cells[2] = HIT;
 	expect_total(g4, fl({{ship_straight(1), 2}}), true, 0);
+}
+
+// With sinking announced, a ship can't be all hits unless it is marked sunk.
+TEST(hits_with_sunk_announced) {
+	Fleet f = fl({{ship_straight(1), 1}, {ship_straight(2), 1}});
+	GameState g(5, 1);
+	g.cells[0] = HIT;
+	// hit is the 1x1 (1x2 at 2-3 or 3-4) or the 1x2 at 0-1 (1x1 at 3 or 4)
+	expect_total(g, f, true, 4);
+	// announced: the hit can't be the 1x1, so cell 1 is certain
+	Result r = expect_total(g, f, true, 2, true);
+	CHECK_EQ(r.cell_counts[1], r.total);
+	// a fully hit 1x2 that is not marked sunk is impossible
+	GameState g2(4, 1);
+	g2.cells[0] = g2.cells[1] = HIT;
+	Fleet f2 = fl({{ship_straight(2), 1}});
+	expect_total(g2, f2, true, 1);
+	expect_total(g2, f2, true, 0, true);
 }
 
 TEST(sunk_ships) {

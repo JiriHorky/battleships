@@ -94,7 +94,7 @@ static int lowest_bit(Mask m) {
 	return 64 + __builtin_ctzll((uint64_t)(m >> 64));
 }
 
-Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate) {
+Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate, bool sunk_announced) {
 	Problem p;
 	p.W = gs.W;
 	p.H = gs.H;
@@ -151,6 +151,8 @@ Problem make_problem(const GameState & gs, const Fleet & fleet, bool rotate) {
 					Mask halo = halo_of(p.W, p.H, cells);
 					// a hit next to (but not under) this ship could never be covered
 					if (halo & ~cells & p.hits) continue;
+					// all hit but not marked sunk: it would have been announced
+					if (sunk_announced && (cells & ~p.hits) == 0) continue;
 					p.placements.push_back(Placement{t, lowest_bit(cells), cells, halo});
 				}
 		}
