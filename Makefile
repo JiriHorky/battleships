@@ -29,7 +29,7 @@ $(OUTDIR)/tui: $(LIB_SRCS) $(LIB_HDRS) src/tui.cpp | $(OUTDIR)
 	$(CXX) $(CXXFLAGS) $(LIB_SRCS) src/tui.cpp -o $@
 
 # Benchmark set: legacy setups and the 10x10 game fleet, from the empty board
-# (the slowest: ~1.6 s and ~5 GB per run on an M4 Pro) to late game.
+# (the slowest: ~0.4 s and ~0.3 GB per run on an M4 Pro) to late game.
 bench: $(OUTDIR)/bench
 	./$(OUTDIR)/bench --repeat 3 legacy game-
 

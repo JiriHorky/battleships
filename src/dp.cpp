@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <stdexcept>
 #include <thread>
 
@@ -31,6 +32,50 @@ static inline bool add_ovf(u128 & a, u128 b) {
 }
 
 static const uint32_t EMPTY = 0xFFFFFFFFu;
+
+// LEB128 varints: 7 bits per byte, high bit set on all but the last byte.
+template <typename T>
+constexpr size_t max_varint_bytes() { return (sizeof(T) * 8 + 6) / 7; }
+template <typename T>
+static inline uint8_t * put_varint(uint8_t * out, T v) {
+	while (v >= 0x80) {
+		*out++ = (uint8_t)v | 0x80;
+		v >>= 7;
+	}
+	*out++ = (uint8_t)v;
+	return out;
+}
+// Branch-free for values below 2^56 (writes 8 bytes, advances by the length).
+template <>
+inline uint8_t * put_varint<uint64_t>(uint8_t * out, uint64_t v) {
+	if (__builtin_expect(v >> 56, 0)) {
+		while (v >= 0x80) {
+			*out++ = (uint8_t)v | 0x80;
+			v >>= 7;
+		}
+		*out++ = (uint8_t)v;
+		return out;
+	}
+	const int len = (64 - __builtin_clzll(v | 1) + 6) / 7;
+	// spread 56 bits into 7-bit groups: 28 -> 14 -> 7 bits per byte
+	uint64_t x = (v & 0x000000000FFFFFFFull) | ((v & 0x00FFFFFFF0000000ull) << 4);
+	x = (x & 0x00003FFF00003FFFull) | ((x & 0x0FFFC0000FFFC000ull) << 2);
+	x = (x & 0x007F007F007F007Full) | ((x & 0x3F803F803F803F80ull) << 1);
+	x |= 0x8080808080808080ull & ((1ull << (8 * (len - 1))) - 1);  // continuation bits
+	memcpy(out, &x, 8);
+	return out + len;
+}
+template <typename T>
+static inline T get_varint(const uint8_t *& p) {
+	T v = *p++;
+	if (v < 0x80) return v;  // the common case
+	v &= 0x7F;
+	for (int sh = 7;; sh += 7) {
+		const uint8_t b = *p++;
+		v |= (T)(b & 0x7F) << sh;
+		if (b < 0x80) return v;
+	}
+}
 
 // Open-addressing index: mask -> position in an external mask array.
 template <typename MT>
@@ -66,9 +111,10 @@ struct Accumulator {
 	std::vector<MT> masks;
 	std::vector<CT> vals;
 	bool ovf = false;
-	// state budget shared by all accumulators of one DP run
+	// memory budget (bytes of stored states) shared by all accumulators of one DP run
 	std::atomic<size_t> * stored = nullptr;
 	size_t budget = 0;
+	std::vector<std::pair<MT, CT>> tail;  // scratch for take_sorted()
 	size_t reported = 0;  // states of the current group already added to *stored
 
 	void reset() {
@@ -83,7 +129,8 @@ struct Accumulator {
 	// in-progress groups of all threads count against the budget.
 	void report() {
 		if (!stored) return;
-		size_t total = stored->fetch_add(masks.size() - reported) + masks.size() - reported;
+		const size_t add = (masks.size() - reported) * (sizeof(MT) + sizeof(CT));
+		size_t total = stored->fetch_add(add) + add;
 		reported = masks.size();
 		if (total > budget) throw std::runtime_error("DP state budget exceeded (DpOptions::max_states)");
 	}
@@ -95,6 +142,29 @@ struct Accumulator {
 			while (slots[s] != EMPTY) s = (s + 1) & mod;
 			slots[s] = i;
 		}
+	}
+	// Moves the accumulated states into g, sorted by mask (packing needs
+	// that). The first `nsorted` states were inserted in increasing mask
+	// order, so only the rest is sorted, then the two runs are merged.
+	template <typename G>
+	void take_sorted(G & g, size_t nsorted) {
+		const size_t n = masks.size();
+		tail.resize(n - nsorted);
+		for (size_t i = nsorted; i < n; i++) tail[i - nsorted] = {masks[i], vals[i]};
+		std::sort(tail.begin(), tail.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
+		g.mask.resize(n);
+		g.fwd.resize(n);
+		size_t i = 0, j = 0;
+		for (size_t o = 0; o < n; o++) {  // masks are distinct: no ties
+			if (j == tail.size() || (i < nsorted && masks[i] < tail[j].first)) {
+				g.mask[o] = masks[i];
+				g.fwd[o] = vals[i++];
+			} else {
+				g.mask[o] = tail[j].first;
+				g.fwd[o] = tail[j++].second;
+			}
+		}
+		if (tail.capacity() > (1u << 20)) std::vector<std::pair<MT, CT>>().swap(tail);
 	}
 	inline void add(MT m, CT v) {
 		for (uint64_t s = hash_mask(m) & mod;; s = (s + 1) & mod) {
@@ -134,12 +204,50 @@ static int grown_area(const Shape & s) {
 	return n;
 }
 
+// States of one remaining fleet at one layer. A layer is kept plain (mask,
+// fwd: sorted by mask) while it is being read or written and packed in
+// between: masks as varint deltas, each followed by its fwd count as a
+// varint. The count is left out when the current cell is already taken
+// (mask bit 0): no ship can be anchored there, and the backward pass only
+// needs fwd for placements. The forward pass stores every layer, so packing
+// (~2 bytes per state instead of 16 on 10x10) is what bounds peak memory.
 template <typename MT, typename CT>
 struct Group {
 	std::vector<MT> mask;
 	std::vector<CT> fwd;
 	std::vector<CT> bwd;
 	MaskIndex<MT> index;
+	std::vector<uint8_t> packed;
+	size_t npacked = 0;
+
+	// Replaces mask/fwd (sorted by mask) with `packed`; buf is scratch.
+	void pack(std::vector<uint8_t> & buf) {
+		const size_t n = mask.size();
+		if (!n) return;
+		buf.resize(n * (max_varint_bytes<MT>() + max_varint_bytes<CT>()));
+		uint8_t * out = buf.data();
+		MT prev = 0;
+		for (size_t i = 0; i < n; i++) {
+			out = put_varint(out, (MT)(mask[i] - prev));
+			if (!(mask[i] & 1)) out = put_varint(out, fwd[i]);
+			prev = mask[i];
+		}
+		packed.assign(buf.data(), out);
+		npacked = n;
+		std::vector<MT>().swap(mask);
+		std::vector<CT>().swap(fwd);
+	}
+	// Reads the packed states back in order: next() yields (mask, fwd), with
+	// fwd = 0 for states whose count was left out.
+	struct Reader {
+		const uint8_t * p;
+		MT prev = 0;
+		explicit Reader(const std::vector<uint8_t> & packed) : p(packed.data()) {}
+		inline void next(MT & m, CT & fw) {
+			m = prev += get_varint<MT>(p);
+			fw = (m & 1) ? 0 : get_varint<CT>(p);
+		}
+	};
 };
 
 // Largest offset (in grown-board cells) between a placement's anchor and the
@@ -306,10 +414,12 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 	// ---- Forward pass: build layer g+1 one destination group at a time. ----
 	std::vector<Accumulator<MT, CT>> acc(nthreads);
 	std::atomic<bool> ovf(false);
-	std::atomic<size_t> stored(0);
-	// max_states is calibrated for 16-byte states (64-bit mask + 64-bit count);
-	// scale it so wider masks/counts get the same memory budget.
-	const size_t budget = (size_t)((long double)max_states * 16 / (sizeof(MT) + sizeof(CT)));
+	std::atomic<size_t> stored(L[0][full].mask.size() * (sizeof(MT) + sizeof(CT)));
+	// max_states is calibrated for 16-byte states (64-bit mask + 64-bit count):
+	// the budget is that much memory, counted as the bytes actually stored
+	// (packed layers, plus plain layers and groups being built at full width).
+	const size_t budget = max_states * 16;
+	std::vector<std::vector<uint8_t>> packbuf(nthreads);
 	for (auto & a : acc) {
 		a.stored = &stored;
 		a.budget = budget;
@@ -331,6 +441,10 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 				MT m2 = m >> 1;
 				if (la.canon(g + 1, left[d], m2) && viable(g + 1, m2, d)) A.add(m2, same.fwd[s]);
 			}
+			// Sources are sorted by mask and m -> m >> 1 keeps the order, but
+			// canonicalization can break it (and merge states), so only the
+			// prefix that actually came out sorted is treated as such.
+			const size_t nsorted = std::is_sorted_until(A.masks.begin(), A.masks.end()) - A.masks.begin();
 			// a ship of type t anchored here
 			for (int t : feeders[d]) {
 				const auto & trs = at[g][t];
@@ -348,13 +462,23 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 			}
 			if (A.ovf) ovf = true;
 			A.report();
-			nxt[d].mask.assign(A.masks.begin(), A.masks.end());
-			nxt[d].fwd.assign(A.vals.begin(), A.vals.end());
+			A.take_sorted(nxt[d], nsorted);
 		});
 		if (ovf) return false;
+		// layer g has been read for the last time in this pass: pack it
+		parallel_for(nthreads, nfleet, [&](size_t fi, int tid) {
+			const size_t plain = cur[fi].mask.size() * (sizeof(MT) + sizeof(CT));
+			cur[fi].pack(packbuf[tid]);
+			stored += cur[fi].packed.size();
+			stored -= plain;
+		});
 	}
+	std::vector<std::vector<uint8_t>>().swap(packbuf);
 	std::vector<Accumulator<MT, CT>>().swap(acc);
-	if (stats) stats->forward_s = secs_since(t_fwd);
+	if (stats) {
+		stats->forward_s = secs_since(t_fwd);
+		stats->stored_bytes = stored;
+	}
 	auto t_bwd = std::chrono::steady_clock::now();
 
 	// ---- Backward pass, accumulating per-placement weights per thread. ----
@@ -372,9 +496,13 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		parallel_for(nthreads, nfleet, [&](size_t fi, int tid) {
 			const uint32_t f = (uint32_t)fi;
 			auto & grp = cur[f];
-			const size_t n = grp.mask.size();
+			// Layers below G are packed: decode the masks (kept: layer g+1
+			// at the next step) and the fwd counts (used once) as we go.
+			const size_t n = grp.npacked;
 			if (!n) return;
-			grp.bwd.assign(n, 0);
+			typename Group<MT, CT>::Reader rd(grp.packed);
+			grp.mask.resize(n);
+			grp.bwd.resize(n);
 			// destination masks are looked up in the same canonical form the
 			// forward pass stored them in
 			auto get = [&](uint32_t f2, MT m) -> CT {
@@ -386,11 +514,13 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 			std::vector<u128> & W = weight[tid];
 			size_t local_dead = 0;
 			for (size_t s = 0; s < n; s++) {
-				const MT m = grp.mask[s];
+				MT m;
+				CT fw;
+				rd.next(m, fw);
+				grp.mask[s] = m;
 				CT b = 0;
 				if ((m & 1) || !h) b = get(f, m >> 1);
 				if (!(m & 1)) {
-					const CT fw = grp.fwd[s];
 					for (int t = 0; t < T; t++) {
 						if (digit(f, t) == 0) continue;
 						for (const auto & tr : at[g][t]) {
@@ -405,6 +535,8 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 				grp.bwd[s] = b;
 				local_dead += b == 0;
 			}
+			std::vector<uint8_t>().swap(grp.packed);
+			grp.npacked = 0;
 			a_states += n;
 			a_dead += local_dead;
 		});
@@ -413,7 +545,6 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		parallel_for(nthreads, nfleet, [&](size_t fi, int) {
 			nxt[fi] = Group<MT, CT>();
 			if (!cur[fi].mask.empty()) cur[fi].index.build(cur[fi].mask);
-			std::vector<CT>().swap(cur[fi].fwd);
 		});
 		if (stats) {
 			stats->max_layer_states = std::max(stats->max_layer_states, a_states.load());

@@ -116,6 +116,9 @@ kriznik  . # . # .     parnik  . # .
     parallel without locks.
   * The board is transposed when that makes the frontier narrower.
   * Counts are exact: 64-bit, retried in 128-bit on overflow.
+  * The forward pass keeps every layer for the backward pass. Layers not in
+    use are packed: states sorted by mask, stored as varint mask deltas and
+    varint counts (~2 bytes per state instead of 16 on 10x10).
 
 The original solver is kept in `main.cpp` (`bin/main`) for reference. It only
 places ships in their given orientation and supports neither hits nor sunk
@@ -126,9 +129,9 @@ ships.
 | scenario | original `main.cpp` | now |
 |---|---|---|
 | legacy 9x8, fixed orientation | 8.0 s | 0.01–0.04 s |
-| game fleet 10x10, empty board (worst case) | — | 1.7 s, 4.8 GB |
+| game fleet 10x10, empty board (worst case) | — | 0.4 s, 0.3 GB |
 | game fleet 10x10, after 3 / 10 / 20 shots | — | 1.1 s / 0.07 s / 0.05 s |
-| czech fleet 10x10, empty board | — | 6.2 s, 16 GB |
+| czech fleet 10x10, empty board | — | 6.2 s, 2.8 GB |
 
 `./bin/bench` prints time, DP state counts, dead states, peak memory and
 forward/backward split; `./bin/bench --solver brute` runs the reference

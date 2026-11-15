@@ -19,7 +19,10 @@
 // A forward pass counts the ways to reach each state, a backward pass counts
 // the ways to complete it; fwd * bwd summed over every transition that uses a
 // placement gives the number of configurations containing that placement,
-// from which the per-cell counts follow.
+// from which the per-cell counts follow. The backward pass needs every
+// layer's fwd counts, so all layers are kept; those not in use are packed
+// (states sorted by mask, varint mask deltas and counts: ~2 bytes per state
+// instead of 16 on 10x10), which is what bounds peak memory.
 //
 // States are grouped by remaining fleet; a destination group only receives
 // from itself and from groups with one more ship, so groups are built in
@@ -33,6 +36,7 @@ struct DpStats {
 	size_t max_layer_states = 0;
 	size_t total_states = 0;
 	size_t dead_states = 0;  // states that cannot be completed (bwd == 0)
+	size_t stored_bytes = 0; // state storage at the end of the forward pass
 	bool transposed = false;
 	double forward_s = 0, backward_s = 0;
 };
@@ -42,9 +46,9 @@ struct DpOptions {
 	bool allow_transpose = true;   // scan along the longer side
 	bool force_wide_counts = false;  // skip the uint64 attempt (testing)
 	// Abort with std::runtime_error once the forward pass has stored more
-	// states than this. Calibrated for 16-byte states (~24 GB by default);
-	// scaled down when 128-bit masks or counts are needed. The 10x10 game
-	// fleet needs ~3e8.
+	// than max_states * 16 bytes of states (~24 GB by default). Stored layers
+	// are packed to ~2 bytes per state on 10x10, so this allows several
+	// times more states; the 10x10 game fleet stores ~8e7 (~0.16 GB).
 	size_t max_states = 1500000000;
 };
 
