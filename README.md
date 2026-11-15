@@ -26,40 +26,11 @@ make bench       # benchmark scenarios (legacy + 10x10 game fleet)
 ```sh
 ./bin/tui                     # empty 10x10 board, game fleet
 ./bin/tui game.txt            # load/save game.txt (created on first save)
-./bin/tui --fleet czech --size 10x10
 ```
 
-The board shows every cell's hit probability in %, coloured from cold to
-hot, and marks the best next shot with `*`. Cells are drawn about square
-(3 columns by 1½ lines); a terminal shorter than about 32 lines gets the
-compact one-line-per-row view instead. It is recomputed after every
-change, in the background, so the cursor keeps moving while a slow position
-is being solved.
-
-| key | action |
-|---|---|
-| arrows / `h j k l` | move the cursor |
-| `x` | hit (press again to clear) |
-| `o` | miss (press again to clear) |
-| `s` | sunk: turns the group of hits under the cursor into a sunk ship, or back into hits |
-| space / `.` / backspace | clear the cell |
-| `b` / enter | jump to the best shot |
-| `u` | undo |
-| `r` | reset the board |
-| `v` | switch between square cells and the compact view |
-| `w` | save to the state file (`state.txt` if none was given) |
-| `q` | quit |
-
-To record a sunk ship, mark all of its cells as hits, then press `s` on one of
-them. The ship type is recognised by its shape.
-
-The fleet panel next to the board draws every ship by its shape: bright
-copies are still afloat, dark red ones are sunk. Its header shows how many
-ships are afloat and how many of their cells are not hit yet. On a terminal
-narrower than about 80 columns the panel moves below the board.
-
-A shape that is not a ship of the fleet, or a board no fleet layout fits, is
-reported in red.
+Shows every cell's hit probability and the best next shot, recomputed after
+each move, with the remaining fleet beside or below the board. The keys are listed on
+screen; `./bin/tui --help` lists the options.
 
 ## Playing from a file
 

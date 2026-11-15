@@ -555,6 +555,9 @@ int main(int argc, char ** argv) {
 				fprintf(stderr, "error: --size must be WxH with at most 128 cells\n");
 				return 1;
 			}
+		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+			printf("usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--threads N] [state-file]\n");
+			return 0;
 		} else if (argv[i][0] == '-') {
 			fprintf(stderr, "usage: tui [--fleet game|czech|legacy] [--size WxH] [--no-rotate] [--threads N] [state-file]\n");
 			return 1;
