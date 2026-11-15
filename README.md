@@ -56,8 +56,10 @@ them. The ship type is recognised by its shape.
 The fleet panel next to the board draws every ship by its shape: bright
 copies are still afloat, dark red ones are sunk. Its header shows how many
 ships are afloat and how many of their cells are not hit yet. On a terminal
-narrower than about 80 columns the panel moves below the board. A shape that is not a ship of the fleet, or a
-board no fleet layout fits, is reported in red.
+narrower than about 80 columns the panel moves below the board.
+
+A shape that is not a ship of the fleet, or a board no fleet layout fits, is
+reported in red.
 
 ## Playing from a file
 
@@ -110,6 +112,10 @@ kriznik  . # . # .     parnik  . # .
     up to a ship's farthest reach (57 cells on 10x10), so it fits in 64 bits;
     very wide boards use 128 bits. The grown cells left over also give an
     exact bound on wasted space, which prunes hopeless states early.
+  * Lookahead: from the mask, a few bit operations find the cells ahead that
+    can still hold a ship. States with a hit that can no longer be covered
+    are dropped, and cells no future ship can use are filled in, so states
+    that differ only in such cells merge (~4x fewer states).
   * A forward pass (ways to reach each state) and a backward pass (ways to
     complete it) give exact per-placement and per-cell counts.
   * States are grouped by remaining fleet, which makes both passes
@@ -128,11 +134,14 @@ ships.
 
 | scenario | original `main.cpp` | now |
 |---|---|---|
-| legacy 9x8, fixed orientation | 8.0 s | 0.01–0.04 s |
-| game fleet 10x10, empty board (worst case) | — | 0.4 s, 0.3 GB |
-| game fleet 10x10, after 3 / 10 / 20 shots | — | 1.1 s / 0.07 s / 0.05 s |
-| czech fleet 10x10, empty board | — | 6.2 s, 2.8 GB |
+| legacy 9x8, fixed orientation | 8.0 s | 0.04 s |
+| game fleet 10x10, empty board (worst case) | — | 0.45 s, 0.3 GB |
+| game fleet 10x10, after 3 / 10 / 20 shots | — | 0.3 s / 0.05 s / 0.05 s |
+| czech fleet 10x10, empty board | — | 1.3 s, 0.9 GB |
 
 `./bin/bench` prints time, DP state counts, dead states, peak memory and
 forward/backward split; `./bin/bench --solver brute` runs the reference
 solver instead.
+
+[OPTIMIZATIONS.md](OPTIMIZATIONS.md) describes the optimization experiments,
+including those that were measured and not kept.

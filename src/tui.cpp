@@ -13,7 +13,7 @@
 //   q               quit
 //
 // The solver runs in a background thread, so the cursor keeps moving while a
-// slow position (e.g. the empty 10x10 board, ~1.5 s) is being computed.
+// slow position (e.g. the empty 10x10 board, ~0.5 s) is being computed.
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <signal.h>
