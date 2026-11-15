@@ -1,7 +1,7 @@
 // Core model shared by all solvers: board, ship shapes, fleet, game state,
 // and the precomputed list of legal placements ("Problem").
 //
-// Rules (same as the original main.cpp):
+// Rules (same as the original solver, main.cpp in commit 2dfcdb7):
 //   * ships are polyominoes given by a bitmap over their bounding box,
 //   * ships may not overlap and may not touch, not even diagonally,
 //   * identical ships are interchangeable (a configuration is a *set* of

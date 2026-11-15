@@ -1,4 +1,5 @@
-// Ship definitions used by the original main.cpp, and the fleets built from them.
+// Ship definitions from the original solver (main.cpp in commit 2dfcdb7), and the
+// fleets built from them.
 #pragma once
 #include <stdexcept>
 
@@ -10,7 +11,7 @@ inline Shape ship_straight(int n) { return make_shape(n, 1, std::vector<int>(n, 
 inline Shape ship_parnik() { return make_shape(3, 2, {0, 1, 0, 1, 1, 1}); }
 inline Shape ship_kriznik() { return make_shape(5, 2, {0, 1, 0, 1, 0, 1, 1, 1, 1, 1}); }
 
-// The fleet that is active in the original main(): 5, 4, 3, 3, 1, 1, 1.
+// The fleet active in the original solver's main(): 5, 4, 3, 3, 1, 1, 1.
 inline Fleet fleet_legacy() {
 	return {
 		{"petka", ship_straight(5), 1},
@@ -31,7 +32,7 @@ inline Fleet fleet_game() {
 	};
 }
 
-// Every ship defined in the original main(): 14 ships, 40 cells (stress test).
+// Every ship defined in the original solver: 14 ships, 40 cells (stress test).
 inline Fleet fleet_czech() {
 	return {
 		{"kriznik", ship_kriznik(), 1},

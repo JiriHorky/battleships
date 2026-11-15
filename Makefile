@@ -6,15 +6,11 @@ LIB_SRCS = src/core.cpp src/brute.cpp src/dp.cpp src/board.cpp
 LIB_HDRS = $(wildcard src/*.h)
 TEST_SRCS = $(wildcard tests/*.cpp)
 
-all: $(OUTDIR)/main $(OUTDIR)/tests $(OUTDIR)/bench $(OUTDIR)/play $(OUTDIR)/tui
+all: $(OUTDIR)/tests $(OUTDIR)/bench $(OUTDIR)/play $(OUTDIR)/tui
 	@echo Compiled all executables
 
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
-
-# The original solver, kept as-is for reference.
-$(OUTDIR)/main: main.cpp | $(OUTDIR)
-	$(CXX) -Wall -O3 -g main.cpp -o $@
 
 $(OUTDIR)/tests: $(LIB_SRCS) $(LIB_HDRS) $(TEST_SRCS) tests/test_util.h | $(OUTDIR)
 	$(CXX) $(CXXFLAGS) -DSRC_ROOT=\"$(CURDIR)\" $(LIB_SRCS) $(TEST_SRCS) -o $@

@@ -234,7 +234,8 @@ TEST(empty_square_board_is_symmetric) {
 	}
 }
 
-// The original program (fixed orientations) on its default 9x8 setup.
+// The original solver (main.cpp in commit 2dfcdb7; fixed orientations) on its
+// default 9x8 setup.
 // The golden file holds its grid and frequency table with the debug lines removed.
 SLOW_TEST(matches_legacy_golden_9x8) {
 	std::ifstream in(SRC_ROOT "/tests/golden/legacy_9x8_default.txt");

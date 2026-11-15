@@ -15,9 +15,9 @@ interchangeable, so swapping two identical ships is not a new configuration.
 Needs a C++17 compiler (Apple clang or GCC).
 
 ```sh
-make             # builds bin/tui, bin/play, bin/bench, bin/tests and the original bin/main
+make             # builds bin/tui, bin/play, bin/bench and bin/tests
 make test        # fast tests
-make test-all    # + slow test reproducing the original program's output (~15s)
+make test-all    # + slow golden-output test on the legacy 9x8 setup (~15s)
 make bench       # benchmark scenarios (legacy + 10x10 game fleet)
 ```
 
@@ -87,8 +87,8 @@ contradiction named when it is a direct one (e.g. a hit touching a sunk ship).
 | fleet | ships |
 |---|---|
 | `game` (default, 10x10) | 1 kriznik, 1 petka (5), 2 parnik (T), 3 dvojka (2), 5 jednicka (1) |
-| `czech` (stress test) | every ship from the original `main.cpp`: 14 ships, 40 cells |
-| `legacy` | the fleet active in the original `main()`: 5, 4, 3, 3, 1, 1, 1 |
+| `czech` (stress test) | 1 kriznik, 1 petka, 1 ctyrka (4), 2 parnik, 2 trojka (3), 3 dvojka, 4 jednicka: 14 ships, 40 cells |
+| `legacy` | 5, 4, 3, 3, 1, 1, 1 |
 
 ```
 kriznik  . # . # .     parnik  . # .
@@ -126,22 +126,22 @@ kriznik  . # . # .     parnik  . # .
     use are packed: states sorted by mask, stored as varint mask deltas and
     varint counts (~2 bytes per state instead of 16 on 10x10).
 
-The original solver is kept in `main.cpp` (`bin/main`) for reference. It only
-places ships in their given orientation and supports neither hits nor sunk
-ships.
-
 ## Performance (Apple M4 Pro, 12 threads)
 
-| scenario | original `main.cpp` | now |
-|---|---|---|
-| legacy 9x8, fixed orientation | 8.0 s | 0.015 s |
-| game fleet 10x10, empty board (worst case) | — | 0.39 s, 0.33 GB |
-| game fleet 10x10, after 3 / 10 / 20 / 50 shots | — | 0.26 s / 0.03 s / 0.02 s / 0.001 s |
-| czech fleet 10x10, empty board | — | 1.25 s, 0.95 GB |
+| scenario | time |
+|---|---|
+| legacy 9x8, fixed orientation | 0.015 s |
+| game fleet 10x10, empty board (worst case) | 0.39 s, 0.33 GB |
+| game fleet 10x10, after 3 / 10 / 20 / 50 shots | 0.26 s / 0.03 s / 0.02 s / 0.001 s |
+| czech fleet 10x10, empty board | 1.25 s, 0.95 GB |
 
 `./bin/bench` prints time, DP state counts, dead states, peak memory and
 forward/backward split; `./bin/bench --solver brute` runs the reference
 solver instead.
+
+The original hand-written solver is in the git history: `main.cpp` in commit
+`2dfcdb7`. It took 8 s on the legacy 9x8 setup, placed ships only in their
+given orientation, and supported neither hits nor sunk ships.
 
 [OPTIMIZATIONS.md](OPTIMIZATIONS.md) describes the optimization experiments,
 including those that were measured and not kept.
