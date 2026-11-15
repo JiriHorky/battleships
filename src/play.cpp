@@ -15,75 +15,11 @@
 #include <fstream>
 #include <iostream>
 
+#include "board.h"
 #include "dp.h"
 #include "fleets.h"
 
 using namespace bs;
-
-static GameState parse(std::istream & in, const Fleet & fleet, bool rotate) {
-	std::vector<std::string> rows;
-	std::string line;
-	while (std::getline(in, line)) {
-		std::string r;
-		for (char ch : line)
-			if (ch != ' ' && ch != '\t' && ch != '\r') r.push_back(ch);
-		if (!r.empty()) rows.push_back(r);
-	}
-	if (rows.empty()) throw std::invalid_argument("empty state");
-	int H = (int)rows.size(), W = (int)rows[0].size();
-	if (W * H > 128) throw std::invalid_argument("board larger than 128 cells");
-	GameState gs(W, H);
-	std::vector<int> sunk;
-	for (int r = 0; r < H; r++) {
-		if ((int)rows[r].size() != W) throw std::invalid_argument("rows have different lengths");
-		for (int c = 0; c < W; c++) {
-			char ch = rows[r][c];
-			int i = r * W + c;
-			if (ch == 'o' || ch == 'O') gs.cells[i] = MISS;
-			else if (ch == 'x' || ch == 'X') gs.cells[i] = HIT;
-			else if (ch == 'S') sunk.push_back(i);
-			else if (ch != '.') throw std::invalid_argument(std::string("unknown cell character: ") + ch);
-		}
-	}
-	// group sunk cells into ships (8-connected components)
-	std::vector<int> comp(W * H, -1);
-	std::vector<uint8_t> is_sunk(W * H, 0);
-	for (int i : sunk) is_sunk[i] = 1;
-	for (int i : sunk) {
-		if (comp[i] >= 0) continue;
-		std::vector<int> stack{i}, cells;
-		comp[i] = i;
-		while (!stack.empty()) {
-			int x = stack.back();
-			stack.pop_back();
-			cells.push_back(x);
-			for (int dr = -1; dr <= 1; dr++)
-				for (int dc = -1; dc <= 1; dc++) {
-					int rr = x / W + dr, cc = x % W + dc;
-					if (rr < 0 || rr >= H || cc < 0 || cc >= W) continue;
-					int y = rr * W + cc;
-					if (is_sunk[y] && comp[y] < 0) {
-						comp[y] = i;
-						stack.push_back(y);
-					}
-				}
-		}
-		Mask m = 0;
-		for (int x : cells) m |= bit(x);
-		int type = -1;
-		for (int t = 0; t < (int)fleet.size() && type < 0; t++)
-			for (const auto & o : orientations(fleet[t].shape, rotate))
-				for (int r = 0; r + o.h <= H && type < 0; r++)
-					for (int c = 0; c + o.w <= W && type < 0; c++) {
-						Mask om;
-						shape_mask(W, H, o, r, c, om);
-						if (om == m) type = t;
-					}
-		if (type < 0) throw std::invalid_argument("sunk cells do not form a ship of the fleet");
-		gs.sunk.push_back({type, cells});
-	}
-	return gs;
-}
 
 int main(int argc, char ** argv) {
 	std::string fleet_name = "game", file;
@@ -96,18 +32,15 @@ int main(int argc, char ** argv) {
 		else file = argv[i];
 	}
 	try {
-		Fleet fleet;
-		if (fleet_name == "game") fleet = fleet_game();
-		else if (fleet_name == "czech") fleet = fleet_czech();
-		else if (fleet_name == "legacy") fleet = fleet_legacy();
-		else throw std::invalid_argument("unknown fleet '" + fleet_name + "' (use game, czech or legacy)");
-		GameState gs(0, 0);
-		if (file.empty()) gs = parse(std::cin, fleet, rotate);
+		Fleet fleet = fleet_by_name(fleet_name);
+		Board b;
+		if (file.empty()) b = read_board(std::cin);
 		else {
 			std::ifstream in(file);
 			if (!in) throw std::invalid_argument("cannot open " + file);
-			gs = parse(in, fleet, rotate);
+			b = read_board(in);
 		}
+		GameState gs = board_to_state(b, fleet, rotate);
 		auto t0 = std::chrono::steady_clock::now();
 		Problem p = make_problem(gs, fleet, rotate);
 		Result r = solve_dp(p, nullptr, opt);

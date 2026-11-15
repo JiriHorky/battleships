@@ -1,5 +1,7 @@
 // Ship definitions used by the original main.cpp, and the fleets built from them.
 #pragma once
+#include <stdexcept>
+
 #include "core.h"
 
 namespace bs {
@@ -40,6 +42,13 @@ inline Fleet fleet_czech() {
 		{"dvojka", ship_straight(2), 3},
 		{"jednicka", ship_straight(1), 4},
 	};
+}
+
+inline Fleet fleet_by_name(const std::string & name) {
+	if (name == "game") return fleet_game();
+	if (name == "czech") return fleet_czech();
+	if (name == "legacy") return fleet_legacy();
+	throw std::invalid_argument("unknown fleet '" + name + "' (use game, czech or legacy)");
 }
 
 }  // namespace bs

@@ -2,11 +2,11 @@ CXX ?= c++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O3 -g
 OUTDIR = bin
 
-LIB_SRCS = src/core.cpp src/brute.cpp src/dp.cpp
+LIB_SRCS = src/core.cpp src/brute.cpp src/dp.cpp src/board.cpp
 LIB_HDRS = $(wildcard src/*.h)
 TEST_SRCS = $(wildcard tests/*.cpp)
 
-all: $(OUTDIR)/main $(OUTDIR)/tests $(OUTDIR)/bench $(OUTDIR)/play
+all: $(OUTDIR)/main $(OUTDIR)/tests $(OUTDIR)/bench $(OUTDIR)/play $(OUTDIR)/tui
 	@echo Compiled all executables
 
 $(OUTDIR):
@@ -24,6 +24,9 @@ $(OUTDIR)/bench: $(LIB_SRCS) $(LIB_HDRS) src/bench.cpp | $(OUTDIR)
 
 $(OUTDIR)/play: $(LIB_SRCS) $(LIB_HDRS) src/play.cpp | $(OUTDIR)
 	$(CXX) $(CXXFLAGS) $(LIB_SRCS) src/play.cpp -o $@
+
+$(OUTDIR)/tui: $(LIB_SRCS) $(LIB_HDRS) src/tui.cpp | $(OUTDIR)
+	$(CXX) $(CXXFLAGS) $(LIB_SRCS) src/tui.cpp -o $@
 
 # Benchmark set: legacy setups and the 10x10 game fleet, from the empty board
 # (the slowest: ~1.6 s and ~5 GB per run on an M4 Pro) to late game.

@@ -15,13 +15,44 @@ interchangeable, so swapping two identical ships is not a new configuration.
 Needs a C++17 compiler (Apple clang or GCC).
 
 ```sh
-make             # builds bin/play, bin/bench, bin/tests and the original bin/main
+make             # builds bin/tui, bin/play, bin/bench, bin/tests and the original bin/main
 make test        # fast tests
 make test-all    # + slow test reproducing the original program's output (~15s)
 make bench       # benchmark scenarios (legacy + 10x10 game fleet)
 ```
 
-## Playing
+## Playing interactively
+
+```sh
+./bin/tui                     # empty 10x10 board, game fleet
+./bin/tui game.txt            # load/save game.txt (created on first save)
+./bin/tui --fleet czech --size 10x10
+```
+
+The board shows every cell's hit probability in %, coloured from cold to
+hot, and marks the best next shot with `*`. It is recomputed after every
+change, in the background, so the cursor keeps moving while a slow position
+is being solved.
+
+| key | action |
+|---|---|
+| arrows / `h j k l` | move the cursor |
+| `x` | hit (press again to clear) |
+| `o` | miss (press again to clear) |
+| `s` | sunk: turns the group of hits under the cursor into a sunk ship, or back into hits |
+| space / `.` / backspace | clear the cell |
+| `b` / enter | jump to the best shot |
+| `u` | undo |
+| `r` | reset the board |
+| `w` | save to the state file (`state.txt` if none was given) |
+| `q` | quit |
+
+To record a sunk ship, mark all of its cells as hits, then press `s` on one of
+them. The ship type is recognised by its shape, and the fleet line at the top
+shows what is still afloat. A shape that is not a ship of the fleet, or a
+board no fleet layout fits, is reported in red.
+
+## Playing from a file
 
 ```sh
 ./bin/play examples/midgame.txt          # or pipe the state on stdin
