@@ -48,8 +48,12 @@ is being solved.
 | `q` | quit |
 
 To record a sunk ship, mark all of its cells as hits, then press `s` on one of
-them. The ship type is recognised by its shape, and the fleet line at the top
-shows what is still afloat. A shape that is not a ship of the fleet, or a
+them. The ship type is recognised by its shape.
+
+The fleet panel next to the board draws every ship by its shape: bright
+copies are still afloat, dark red ones are sunk. Its header shows how many
+ships are afloat and how many of their cells are not hit yet. On a terminal
+narrower than about 80 columns the panel moves below the board. A shape that is not a ship of the fleet, or a
 board no fleet layout fits, is reported in red.
 
 ## Playing from a file

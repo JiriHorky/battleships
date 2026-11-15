@@ -15,6 +15,7 @@
 // The solver runs in a background thread, so the cursor keeps moving while a
 // slow position (e.g. the empty 10x10 board, ~1.5 s) is being computed.
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <signal.h>
 #include <termios.h>
 #include <unistd.h>
@@ -222,6 +223,69 @@ static std::string col_name(int c) {
 static const int RAMP[] = {236, 237, 23, 24, 30, 36, 72, 108, 143, 179, 215, 209, 203, 197};
 static const int NRAMP = sizeof(RAMP) / sizeof(RAMP[0]);
 
+// Fleet panel: every ship drawn by shape, afloat copies first (bright), sunk
+// copies after (dark red). Returns lines and their visible width.
+static std::vector<std::string> fleet_panel(const App & a, int & width) {
+	std::vector<std::string> lines;
+	std::vector<int> vis;  // visible width of each line
+	auto add = [&](const std::string & text, int w) {
+		lines.push_back(text);
+		vis.push_back(w);
+	};
+	int ships = 0, cells = 0, hits = 0;
+	for (char ch : a.board.cells) hits += ch == 'x';
+	std::vector<int> left(a.fleet.size()), sunk(a.fleet.size());
+	for (size_t t = 0; t < a.fleet.size(); t++) {
+		sunk[t] = t < a.sunk_count.size() ? a.sunk_count[t] : 0;
+		left[t] = std::max(0, a.fleet[t].count - sunk[t]);
+		ships += left[t];
+		cells += left[t] * a.fleet[t].shape.size();
+	}
+	char buf[96];
+	snprintf(buf, sizeof buf, "Ships afloat: %d", ships);
+	add(std::string("\x1b[1m") + buf + "\x1b[0m", (int)strlen(buf));
+	snprintf(buf, sizeof buf, "Cells to hit: %d", std::max(0, cells - hits));
+	add(std::string("\x1b[1m") + buf + "\x1b[0m", (int)strlen(buf));
+	add("", 0);
+	for (size_t t = 0; t < a.fleet.size(); t++) {
+		const ShipType & st = a.fleet[t];
+		std::string name = st.name;
+		name.resize(std::max<size_t>(name.size(), 9), ' ');
+		std::string text = left[t] ? std::to_string(left[t]) + " left" : "all sunk";
+		std::string sunk_txt = left[t] && sunk[t] ? ", " + std::to_string(sunk[t]) + " sunk" : "";
+		std::string style = left[t] ? "\x1b[1m" : "\x1b[2m";
+		add(style + name + "\x1b[0m" + (left[t] ? "" : "\x1b[38;5;203m") + text + "\x1b[0m" +
+		        "\x1b[38;5;203m" + sunk_txt + "\x1b[0m",
+		    (int)(name.size() + text.size() + sunk_txt.size()));
+		int copies = left[t] + std::min(sunk[t], st.count);
+		for (int r = 0; r < st.shape.h; r++) {
+			std::string row = "  ";
+			int w = 2;
+			for (int k = 0; k < copies; k++) {
+				if (k) {
+					row += " ";
+					w++;
+				}
+				const char * col = k < left[t] ? "\x1b[38;5;153m" : "\x1b[38;5;88m";
+				for (int c = 0; c < st.shape.w; c++) {
+					row += st.shape.at(r, c) ? std::string(col) + "\u2588\u2588\x1b[0m" : std::string("  ");
+					w += 2;
+				}
+			}
+			add(row, w);
+		}
+	}
+	width = 0;
+	for (int w : vis) width = std::max(width, w);
+	return lines;
+}
+
+static int term_cols() {
+	struct winsize ws;
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return ws.ws_col;
+	return 80;
+}
+
 static void draw(const App & a) {
 	static const char * SPIN = "|/-\\";
 	static int spin = 0;
@@ -238,13 +302,7 @@ static void draw(const App & a) {
 
 	std::string s = "\x1b[H";
 	s += "\x1b[1m Battleships\x1b[0m   " + std::to_string(b.W) + "x" + std::to_string(b.H) + " board\x1b[K\n";
-	// fleet status
-	s += " Fleet afloat:";
-	for (size_t t = 0; t < a.fleet.size(); t++) {
-		int left = a.fleet[t].count - (t < a.sunk_count.size() ? a.sunk_count[t] : 0);
-		s += "  " + a.fleet[t].name + " " + std::to_string(left) + "/" + std::to_string(a.fleet[t].count);
-	}
-	s += "\x1b[K\n\x1b[K\n";
+	s += "\x1b[K\n";
 
 	s += "     ";
 	for (int c = 0; c < b.W; c++) {
@@ -334,6 +392,35 @@ static void draw(const App & a) {
 	s += " " + a.message + "\x1b[K\n\x1b[K\n";
 	s += " \x1b[2marrows/hjkl move   x hit   o miss   s sunk (toggle hit group)   space clear\x1b[0m\x1b[K\n";
 	s += " \x1b[2mb/enter best shot   u undo   r reset   w save to " + a.file + "   q quit\x1b[0m\x1b[K\n";
+	// put the fleet panel to the right of the board if it fits, else below
+	int pw = 0;
+	std::vector<std::string> panel = fleet_panel(a, pw);
+	int col = 5 + 5 * b.W + 2;  // board rows are 5 + 5*W columns wide
+	const std::string EOL = "\x1b[K\n";
+	if (term_cols() >= col + pw - 1) {
+		// beside the title, column header and board rows; the rest of the
+		// panel gets its own lines, pushing the status down
+		size_t board_lines = 3 + (size_t)b.H;
+		std::string merged, at = "\x1b[" + std::to_string(col) + "G";
+		size_t pos = 0;
+		for (size_t i = 0;; i++) {
+			if (i == board_lines)
+				for (size_t j = board_lines; j < panel.size(); j++) merged += at + panel[j] + EOL;
+			size_t e = s.find(EOL, pos);
+			if (e == std::string::npos) {
+				merged += s.substr(pos);
+				break;
+			}
+			merged += s.substr(pos, e - pos);
+			if (i < board_lines && i < panel.size()) merged += at + panel[i];
+			merged += EOL;
+			pos = e + EOL.size();
+		}
+		s = merged;
+	} else {
+		s += EOL;
+		for (auto & l : panel) s += " " + l + EOL;
+	}
 	s += "\x1b[J";
 	term_write(s);
 }
