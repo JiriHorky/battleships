@@ -1,8 +1,9 @@
 # Optimization experiments
 
 Four ways to make the DP solver (`src/dp.cpp`) faster or leaner were tried
-side by side, each on its own branch from commit `45f9ce5`. Two of them were
-combined and merged; the rest are kept here for reference.
+side by side, each starting from commit `45f9ce5`. Two of them were combined
+and merged (commits `1d2f0c0` and `71bc085`); the other two were not kept in
+the repository and are described here for reference.
 
 All variants give **identical** totals and per-cell counts on every benchmark
 scenario, pass `make test-all`, and were reviewed independently.
@@ -10,7 +11,8 @@ scenario, pass `make test-all`, and were reviewed independently.
 ## Results
 
 Apple M4 Pro, 12 threads, best of 3, each scenario in its own process (peak
-memory = peak RSS). Run one after another on an idle machine.
+memory = peak RSS). Run one after another on an idle machine; repeated runs
+vary by about ±10 %.
 
 | scenario | baseline `45f9ce5` | 1 · lookahead | 2 · fit table | 3 · checkpoint | 4 · compact | **1 + 4 (merged)** |
 |---|---|---|---|---|---|---|
@@ -23,7 +25,7 @@ memory = peak RSS). Run one after another on an idle machine.
 States stored on the empty 10x10 board (game fleet): baseline 298M, of which
 63M dead (never completed); with lookahead 80M, of which 8M dead.
 
-## 1. Lookahead pruning and mask canonicalization — merged
+## 1. Lookahead pruning and mask canonicalization — merged as part of 1 + 4 (`1d2f0c0`)
 
 From the mask of taken cells, compute with a few 64-bit operations which
 cells ahead can still become a ship cell (P: the cell and its 3 grown
@@ -40,8 +42,6 @@ states are stored, and the filled cells also tighten the wasted-area bound.
 Every stored mask and every backward lookup goes through the same `canon()`
 function, which keeps both passes consistent.
 
-Branch `worktree-agent-a4c6d450eff2239bc`, commit `54abee8`.
-
 ## 2. Fleet fit table — not merged
 
 Precompute, for every remaining fleet, the last cell from which it can still
@@ -55,23 +55,18 @@ under 50 ms, but only 0.02 % on the big boards: most dead states die in the
 middle rows because of interactions with already placed ships and hits, which
 a mask-free relaxation cannot see.
 
-Branch `worktree-agent-a3a1323a7ca3b034a`, commit `a92e304`.
-
 ## 3. Checkpointing — not merged
 
 Keep only every K-th forward layer (K ≈ sqrt(G/3), 6 on 10x10) and recompute
-the missing layers segment by segment during the backward pass. Options
-`DpOptions::checkpoint_every` / `checkpoint_above` (only kicks in above a
-state threshold) and `bench --checkpoint K --checkpoint-above N`.
+the missing layers segment by segment during the backward pass. It was
+switched on only above a state threshold, so small games were unaffected.
 
 Cuts peak memory ~3x but costs 40–50 % more time. Lookahead + compact storage
 cut memory further without that cost, so it is not needed today. It stacks
 with them and would be the next step if a much larger fleet or board ever
 runs out of memory.
 
-Branch `worktree-agent-a3185b4b43c387c63`, commit `3e4d2d7`.
-
-## 4. Compact layer storage — merged
+## 4. Compact layer storage — merged as part of 1 + 4 (`71bc085`)
 
 Once a layer is no longer needed by the forward pass, each group is stored
 sorted by mask as varint mask deltas plus varint counts; counts are omitted
@@ -83,15 +78,13 @@ decodes each group in order. The state budget counts packed bytes.
 ~2 bytes per state instead of 16 (5.7x less memory), 5–7 % slower on its
 own.
 
-Branch `worktree-agent-a5d49b5d352a0e6f6`, commit `ca07e37`.
-
 ## 1 + 4 combined — merged
 
-Commits `1d2f0c0` and `71bc085`. Canonicalization breaks the guarantee that
+Canonicalization breaks the guarantee that
 the "no ship" run is already sorted, so packing uses the longest sorted
-prefix of that run and sorts the rest. 3.2–4x faster than the baseline on the
-big boards and 13–17x less memory; slightly slower than lookahead alone
-(5–20 %), in exchange for ~4x less memory.
+prefix of that run and sorts the rest. 2.5–4x faster than the baseline on the
+big boards and 12–17x less memory; slightly slower than lookahead alone
+(5–20 %), in exchange for ~4.6x less memory.
 
 ## Ideas evaluated earlier and not built
 
