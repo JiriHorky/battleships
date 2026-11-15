@@ -155,6 +155,78 @@ static int max_reach(const Problem & p) {
 	return r;
 }
 
+// Bitwise lookahead on a frontier mask m of layer g (bit j = grown cell g+j
+// taken), a few word operations per state.
+//
+// A future placement (anchored at >= g, of a ship type still left) can use a
+// board cell z as a ship cell only if some such placement covers z at all (V)
+// and z's four grown cells z, z+1, z+GW, z+GW+1 are all still free. Call the
+// set of such cells P; every future grown cell then lies in
+// C = P + {0, 1, GW, GW+1}. canon() uses this to
+//   * reject states with an uncovered hit outside P (it can never be covered);
+//   * fill every real grown cell outside C into the mask. No future placement
+//     can use such a cell, so states differing only there have the same
+//     completions and now merge, and filled cells count as wasted area in
+//     viable(), tightening the bound.
+// Filling cannot remove a cell from P (a cell of P has all its grown cells in
+// C), so canon is idempotent. The fill never hides a hit: an uncovered hit is
+// in P (or the state is rejected), a covered one is already set. A placement
+// that is legal for m never overlaps the filled cells, so transitions are the
+// same for m and canon(m), and since P only shrinks as g advances and cells get
+// taken, canonicalizing every stored and looked-up mask is consistent.
+//
+// Bits past the 64/128-bit window lie beyond every placement's reach and are
+// always free, so the right shifts bring in ones there (the `top` masks).
+template <typename MT>
+struct Lookahead {
+	static constexpr int BITS = sizeof(MT) * 8;
+	int GW = 0;
+	MT top1 = 0, topW = 0, topW1 = 0;  // window bits whose neighbour +1/+GW/+GW+1 lies past the window
+	static constexpr int MAX_SPLIT = 10;  // up to this many ship types, V is kept per set of types left
+	int nsub = 1;
+	std::vector<MT> V;     // per layer and set of types left: cells a placement anchored at >= g can use as ship cell
+	std::vector<MT> H;     // per layer: hit cells
+	std::vector<MT> R;     // per layer: real grown cells (< G)
+
+	void build(const Problem & p, const std::vector<uint8_t> & hit) {
+		GW = p.W + 1;
+		const int G = GW * (p.H + 1);
+		const int T = (int)p.types.size();
+		auto top = [](int k) { return k ? ~(MT)0 << (BITS - k) : (MT)0; };
+		top1 = top(1), topW = top(GW), topW1 = top(GW + 1);
+		// per type: last anchor (grown index) of a placement using grown cell z as a ship cell
+		std::vector<std::vector<int>> last(T, std::vector<int>(G, -1));
+		for (const Placement & pl : p.placements) {
+			int a = (pl.anchor / p.W) * GW + pl.anchor % p.W;
+			for (int i = 0; i < p.N; i++)
+				if ((pl.cells >> i) & 1) {
+					int z = (i / p.W) * GW + i % p.W;
+					last[pl.type][z] = std::max(last[pl.type][z], a);
+				}
+		}
+		nsub = T <= MAX_SPLIT ? 1 << T : 1;
+		V.assign((size_t)(G + 1) * nsub, 0), H.assign(G + 1, 0), R.assign(G + 1, 0);
+		for (int g = 0; g <= G; g++)
+			for (int j = 0; j < BITS && g + j < G; j++) {
+				const int z = g + j;
+				R[g] |= (MT)1 << j;
+				if (hit[z]) H[g] |= (MT)1 << j;
+				for (int sub = 0; sub < nsub; sub++)
+					for (int t = 0; t < T; t++)
+						if ((nsub == 1 || (sub >> t) & 1) && last[t][z] >= g) V[(size_t)g * nsub + sub] |= (MT)1 << j;
+			}
+	}
+	// Canonicalizes mask m of layer g in place; false if the state is dead.
+	inline bool canon(int g, uint32_t sub, MT & m) const {
+		const MT F = ~m;
+		const MT P = V[(size_t)g * nsub + sub] & F & ((F >> 1) | top1) & ((F >> GW) | topW) & ((F >> (GW + 1)) | topW1);
+		if (H[g] & F & ~P) return false;
+		const MT C = P | (P << 1) | (P << GW) | (P << (GW + 1));
+		m |= R[g] & ~C;
+		return true;
+	}
+};
+
 // Returns false if CT overflowed (caller retries with a wider type).
 template <typename MT, typename CT>
 static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthreads, size_t max_states) {
@@ -203,6 +275,15 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 		}
 		at[a][pl.type].push_back(Trans<MT>{gm, k});
 	}
+	// Every mask is passed through la.canon before it is stored or looked up.
+	Lookahead<MT> la;
+	la.build(p, hit);
+	// index of the set of ship types left in fleet f (into Lookahead::V)
+	std::vector<uint32_t> left(nfleet, 0);
+	if (la.nsub > 1)
+		for (uint32_t f = 0; f < nfleet; f++)
+			for (int t = 0; t < T; t++)
+				if (digit(f, t)) left[f] |= 1u << t;
 	// Sources feeding destination group d: d itself (no ship placed) and
 	// d + stride[t] for every type t that still had a ship to place.
 	std::vector<std::vector<int>> feeders(nfleet);
@@ -212,8 +293,9 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 
 	std::vector<std::vector<Group<MT, CT>>> L(G + 1);
 	for (auto & l : L) l.resize(nfleet);
-	if (viable(0, 0, full)) {
-		L[0][full].mask.push_back(0);
+	MT m0 = 0;
+	if (la.canon(0, left[full], m0) && viable(0, m0, full)) {
+		L[0][full].mask.push_back(m0);
 		L[0][full].fwd.push_back(1);
 	}
 
@@ -247,7 +329,7 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 				MT m = same.mask[s];
 				if (!(m & 1) && h) continue;  // an uncovered hit must be covered now
 				MT m2 = m >> 1;
-				if (viable(g + 1, m2, d)) A.add(m2, same.fwd[s]);
+				if (la.canon(g + 1, left[d], m2) && viable(g + 1, m2, d)) A.add(m2, same.fwd[s]);
 			}
 			// a ship of type t anchored here
 			for (int t : feeders[d]) {
@@ -260,7 +342,7 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 					for (const auto & tr : trs) {
 						if (tr.grown & m) continue;
 						MT m2 = (m | tr.grown) >> 1;
-						if (viable(g + 1, m2, d)) A.add(m2, src.fwd[s]);
+						if (la.canon(g + 1, left[d], m2) && viable(g + 1, m2, d)) A.add(m2, src.fwd[s]);
 					}
 				}
 			}
@@ -293,7 +375,10 @@ static bool run_dp(const Problem & p, Result & res, DpStats * stats, int nthread
 			const size_t n = grp.mask.size();
 			if (!n) return;
 			grp.bwd.assign(n, 0);
+			// destination masks are looked up in the same canonical form the
+			// forward pass stored them in
 			auto get = [&](uint32_t f2, MT m) -> CT {
+				if (!la.canon(g + 1, left[f2], m)) return 0;
 				const auto & ng = nxt[f2];
 				uint32_t idx = ng.index.find(ng.mask, m);
 				return idx == EMPTY ? 0 : ng.bwd[idx];

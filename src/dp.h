@@ -13,6 +13,8 @@
 // their grown shapes overlap, so one mask captures the no-touch rule, and the
 // grown cells left over give an exact lower bound on wasted area used for
 // pruning (the full Czech fleet covers 108 of the 121 grown cells of 10x10).
+// A bitwise lookahead also marks grown cells no future ship can use as taken,
+// which tightens that bound and merges states that differ only there.
 //
 // A forward pass counts the ways to reach each state, a backward pass counts
 // the ways to complete it; fwd * bwd summed over every transition that uses a
