@@ -30,7 +30,9 @@ make bench       # benchmark scenarios (legacy + 10x10 game fleet)
 ```
 
 The board shows every cell's hit probability in %, coloured from cold to
-hot, and marks the best next shot with `*`. It is recomputed after every
+hot, and marks the best next shot with `*`. Cells are drawn about square
+(3 columns by 1½ lines); a terminal shorter than about 32 lines gets the
+compact one-line-per-row view instead. It is recomputed after every
 change, in the background, so the cursor keeps moving while a slow position
 is being solved.
 
@@ -44,6 +46,7 @@ is being solved.
 | `b` / enter | jump to the best shot |
 | `u` | undo |
 | `r` | reset the board |
+| `v` | switch between square cells and the compact view |
 | `w` | save to the state file (`state.txt` if none was given) |
 | `q` | quit |
 

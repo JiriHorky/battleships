@@ -147,6 +147,7 @@ struct App {
 	bool rotate = true;
 	DpOptions opt;
 	std::string file;
+	bool square = true;     // square cells (falls back to compact if the terminal is short)
 	bool file_ours = false;  // file was given on the command line or written by us
 
 	Board board;
@@ -176,9 +177,9 @@ struct App {
 	void changed() {
 		gen++;
 		shape_error.clear();
-		sunk_count.assign(fleet.size(), 0);
 		try {
 			GameState gs = board_to_state(board, fleet, rotate);
+			sunk_count.assign(fleet.size(), 0);  // kept from the last valid board on error
 			for (const auto & s : gs.sunk) sunk_count[s.type]++;
 		} catch (const std::exception & e) {
 			shape_error = e.what();
@@ -250,7 +251,7 @@ static std::vector<std::string> fleet_panel(const App & a, int & width) {
 	for (size_t t = 0; t < a.fleet.size(); t++) {
 		const ShipType & st = a.fleet[t];
 		std::string name = st.name;
-		name.resize(std::max<size_t>(name.size(), 9), ' ');
+		name.resize(std::max<size_t>(name.size() + 1, 9), ' ');
 		std::string text = left[t] ? std::to_string(left[t]) + " left" : "all sunk";
 		std::string sunk_txt = left[t] && sunk[t] ? ", " + std::to_string(sunk[t]) + " sunk" : "";
 		std::string style = left[t] ? "\x1b[1m" : "\x1b[2m";
@@ -286,7 +287,119 @@ static int term_cols() {
 	return 80;
 }
 
+struct Look {
+	int bg, fg;
+	bool bold;
+	std::string text;  // 3 characters
+};
+
+static Look cell_look(const App & a, int i, bool fresh, bool stale_numbers, double maxp) {
+	char ch = a.board.cells[i];
+	if (ch == 'o') return {17, 75, false, " o "};
+	if (ch == 'x') return {160, 231, true, " X "};
+	if (ch == 'S') return {52, 210, false, " # "};
+	if (!fresh && !stale_numbers) return {235, 242, false, " . "};
+	u128 cnt = a.last.r.cell_counts[i];
+	double pr = (double)cnt / (double)a.last.r.total;
+	char buf[8];
+	if (cnt == 0) snprintf(buf, sizeof buf, " . ");
+	else if (pr < 0.005) snprintf(buf, sizeof buf, " <1");
+	else snprintf(buf, sizeof buf, "%3.0f", 100 * pr);
+	if (!fresh) return {235, 242, false, buf};  // out of date: greyed out
+	if (cnt == 0) return {234, 240, false, buf};
+	int k = maxp > 0 ? (int)std::lround(pr / maxp * (NRAMP - 1)) : 0;
+	return {RAMP[k], k >= NRAMP / 2 ? 16 : 252, false, buf};
+}
+
+static std::string sgr(int bg, int fg, bool bold) {
+	std::string s = "\x1b[";
+	if (bg >= 0) s += "48;5;" + std::to_string(bg) + ";";
+	s += "38;5;" + std::to_string(fg);
+	if (bold) s += ";1";
+	return s + "m";
+}
+
+// Column header + board rows, each line ending in "\x1b[K\n".
+//  compact: one line per row, cells 5 columns wide (a wide rectangle)
+//  square:  cells 3 columns wide and 1.5 lines tall - a full line plus the
+//           top half of the next one ("\u2580") - which is close to square
+//           since terminal characters are about twice as tall as wide.
+static std::string render_board(const App & a, bool square, bool fresh, bool stale_numbers, int best) {
+	const Board & b = a.board;
+	double maxp = 0;
+	if (fresh)
+		for (int i = 0; i < b.W * b.H; i++)
+			if (b.cells[i] == '.') maxp = std::max(maxp, (double)a.last.r.cell_counts[i] / (double)a.last.r.total);
+	const std::string EOL = "\x1b[K\n";
+	std::string s = "     ";
+	for (int c = 0; c < b.W; c++) {
+		std::string n = col_name(c);
+		s += square ? " " + (n.size() == 1 ? " " + n + " " : n + " ") : "  " + n + std::string(3 - n.size(), ' ');
+	}
+	s += EOL;
+	for (int r = 0; r < b.H; r++) {
+		char lbl[8];
+		snprintf(lbl, sizeof lbl, " %3d ", r + 1);
+		if (!square) {
+			s += lbl;
+			for (int c = 0; c < b.W; c++) {
+				int i = r * b.W + c;
+				Look l = cell_look(a, i, fresh, stale_numbers, maxp);
+				bool cur = (r == a.cr && c == a.cc);
+				std::string style = sgr(l.bg, l.fg, l.bold) + (cur ? "\x1b[7m" : "");
+				s += style + (cur ? "[" : (i == best ? "*" : " ")) + l.text + (cur ? "]" : " ") + "\x1b[0m";
+			}
+			s += EOL;
+			continue;
+		}
+		// gaps[c] is the column left of cell c (and right of cell c-1)
+		std::vector<std::string> gaps(b.W + 1, " ");
+		if (best >= 0 && best / b.W == r) gaps[best % b.W] = "\x1b[1;38;5;226m*\x1b[0m";
+		std::vector<std::string> gaps2(b.W + 1, " ");
+		if (r == a.cr) {
+			gaps[a.cc] = gaps2[a.cc] = "\x1b[1;38;5;231m\u2590\x1b[0m";      // right half block
+			gaps[a.cc + 1] = gaps2[a.cc + 1] = "\x1b[1;38;5;231m\u258c\x1b[0m";  // left half block
+		}
+		std::string top = lbl, bot = "     ";
+		for (int c = 0; c < b.W; c++) {
+			int i = r * b.W + c;
+			Look l = cell_look(a, i, fresh, stale_numbers, maxp);
+			top += gaps[c] + sgr(l.bg, l.fg, l.bold) + l.text + "\x1b[0m";
+			bot += gaps2[c] + sgr(-1, l.bg, false) + "\u2580\u2580\u2580\x1b[0m";
+		}
+		s += top + gaps[b.W] + EOL + bot + gaps2[b.W] + EOL;
+	}
+	return s;
+}
+
+static int term_rows() {
+	struct winsize ws;
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) return ws.ws_row;
+	return 24;
+}
+
+static std::string build_frame(const App & a, bool square);
+
+// Square cells when the user wants them and they fit; never more lines than
+// the terminal has, or it would scroll and the next redraw would be garbled.
 static void draw(const App & a) {
+	int rows = term_rows();
+	auto lines = [](const std::string & f) {
+		size_t n = 0;
+		for (char ch : f) n += ch == '\n';
+		return (int)n;
+	};
+	std::string f = build_frame(a, a.square);
+	if (a.square && lines(f) > rows - 1) f = build_frame(a, false);
+	if (lines(f) > rows - 1) {
+		size_t pos = 0;
+		for (int k = 0; k < rows - 1 && pos != std::string::npos; k++) pos = f.find('\n', pos) + 1;
+		if (pos != std::string::npos && pos > 0) f.resize(pos);
+	}
+	term_write("\x1b[H" + f + "\x1b[J");
+}
+
+static std::string build_frame(const App & a, bool square) {
 	static const char * SPIN = "|/-\\";
 	static int spin = 0;
 	const Board & b = a.board;
@@ -294,66 +407,11 @@ static void draw(const App & a) {
 	bool stale_numbers = a.have_last && a.last.ok && !fresh;
 	int best = a.best_cell();
 
-	// max probability among unknown cells, for the colour scale
-	double maxp = 0;
-	if (fresh)
-		for (int i = 0; i < b.W * b.H; i++)
-			if (b.cells[i] == '.') maxp = std::max(maxp, (double)a.last.r.cell_counts[i] / (double)a.last.r.total);
-
-	std::string s = "\x1b[H";
+	std::string s;
 	s += "\x1b[1m Battleships\x1b[0m   " + std::to_string(b.W) + "x" + std::to_string(b.H) + " board\x1b[K\n";
 	s += "\x1b[K\n";
 
-	s += "     ";
-	for (int c = 0; c < b.W; c++) {
-		std::string n = col_name(c);
-		s += "  " + n + std::string(3 - n.size(), ' ');
-	}
-	s += "\x1b[K\n";
-
-	for (int r = 0; r < b.H; r++) {
-		char lbl[8];
-		snprintf(lbl, sizeof lbl, " %3d ", r + 1);
-		s += lbl;
-		for (int c = 0; c < b.W; c++) {
-			int i = r * b.W + c;
-			char ch = b.cells[i];
-			bool cur = (r == a.cr && c == a.cc);
-			std::string style, text;
-			if (ch == 'o') {
-				style = "\x1b[48;5;17;38;5;75m";
-				text = " o ";
-			} else if (ch == 'x') {
-				style = "\x1b[48;5;160;38;5;231;1m";
-				text = " X ";
-			} else if (ch == 'S') {
-				style = "\x1b[48;5;52;38;5;210m";
-				text = " # ";
-			} else if (fresh || stale_numbers) {
-				double pr = (double)a.last.r.cell_counts[i] / (double)a.last.r.total;
-				char buf[8];
-				if (a.last.r.cell_counts[i] == 0) snprintf(buf, sizeof buf, "  .");
-				else if (pr < 0.005) snprintf(buf, sizeof buf, " <1");
-				else snprintf(buf, sizeof buf, "%3.0f", 100 * pr);
-				text = buf;
-				if (fresh) {
-					int k = maxp > 0 ? (int)std::lround(pr / maxp * (NRAMP - 1)) : 0;
-					if (a.last.r.cell_counts[i] == 0) style = "\x1b[48;5;234;38;5;240m";
-					else style = "\x1b[48;5;" + std::to_string(RAMP[k]) + ";38;5;" + (k >= NRAMP / 2 ? "16" : "252") + "m";
-				} else {
-					style = "\x1b[48;5;235;38;5;242m";  // out of date: greyed out
-				}
-			} else {
-				style = "\x1b[48;5;235;38;5;242m";
-				text = "  .";
-			}
-			if (cur) style += "\x1b[7m";
-			std::string left = cur ? "[" : (i == best ? "*" : " ");
-			std::string right = cur ? "]" : " ";
-			s += style + left + text + right + "\x1b[0m";
-		}
-		s += "\x1b[K\n";
-	}
+	s += render_board(a, square, fresh, stale_numbers, best);
 	s += "\x1b[K\n";
 
 	// status
@@ -391,16 +449,16 @@ static void draw(const App & a) {
 	}
 	s += " " + a.message + "\x1b[K\n\x1b[K\n";
 	s += " \x1b[2marrows/hjkl move   x hit   o miss   s sunk (toggle hit group)   space clear\x1b[0m\x1b[K\n";
-	s += " \x1b[2mb/enter best shot   u undo   r reset   w save to " + a.file + "   q quit\x1b[0m\x1b[K\n";
+	s += " \x1b[2mb/enter best shot   u undo   r reset   v view   w save to " + a.file + "   q quit\x1b[0m\x1b[K\n";
 	// put the fleet panel to the right of the board if it fits, else below
 	int pw = 0;
 	std::vector<std::string> panel = fleet_panel(a, pw);
-	int col = 5 + 5 * b.W + 2;  // board rows are 5 + 5*W columns wide
+	int col = 5 + (square ? 4 * b.W + 1 : 5 * b.W) + 2;  // past the board rows
 	const std::string EOL = "\x1b[K\n";
 	if (term_cols() >= col + pw - 1) {
 		// beside the title, column header and board rows; the rest of the
 		// panel gets its own lines, pushing the status down
-		size_t board_lines = 3 + (size_t)b.H;
+		size_t board_lines = 3 + (size_t)b.H * (square ? 2 : 1);
 		std::string merged, at = "\x1b[" + std::to_string(col) + "G";
 		size_t pos = 0;
 		for (size_t i = 0;; i++) {
@@ -421,8 +479,7 @@ static void draw(const App & a) {
 		s += EOL;
 		for (auto & l : panel) s += " " + l + EOL;
 	}
-	s += "\x1b[J";
-	term_write(s);
+	return s;
 }
 
 // ---------------------------------------------------------------- edits
@@ -556,6 +613,7 @@ int main(int argc, char ** argv) {
 				a.edit([](App & a) { a.board = Board(a.board.W, a.board.H); });
 				a.message = "board reset (u to undo)";
 				break;
+			case 'v': case 'V': a.square = !a.square; break;
 			case 'w': case 'W': save(a); break;
 			case 'q': case 'Q': case 3:
 				term_restore();
