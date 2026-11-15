@@ -26,6 +26,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 
 #include "board.h"
@@ -77,6 +78,7 @@ static void term_raw() {
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 	signal(SIGHUP, on_signal);
+	signal(SIGQUIT, on_signal);
 	term_write("\x1b[?1049h\x1b[?25l\x1b[2J");  // alt screen, hide cursor, clear
 }
 
@@ -144,6 +146,7 @@ struct App {
 	bool rotate = true;
 	DpOptions opt;
 	std::string file;
+	bool file_ours = false;  // file was given on the command line or written by us
 
 	Board board;
 	std::vector<Board> undo;
@@ -161,7 +164,11 @@ struct App {
 	bool fresh() const { return have_last && last.gen == gen; }
 
 	void start_job() {
-		job = std::async(std::launch::async, compute, gen, board, fleet, rotate, opt);
+		try {
+			job = std::async(std::launch::async, compute, gen, board, fleet, rotate, opt);
+		} catch (const std::exception & e) {
+			message = std::string("cannot start the solver: ") + e.what();
+		}
 	}
 
 	// Called after every board edit.
@@ -344,8 +351,9 @@ static void unsink_at(App & a, int i) {
 
 static void set_cell(App & a, char ch) {
 	int i = cur_index(a);
+	char before = a.board.cells[i];
 	unsink_at(a, i);
-	a.board.cells[i] = (a.board.cells[i] == ch) ? '.' : ch;  // pressing again clears
+	a.board.cells[i] = (before == ch) ? '.' : ch;  // pressing again clears
 }
 
 static void toggle_sunk(App & a) {
@@ -360,10 +368,15 @@ static void toggle_sunk(App & a) {
 }
 
 static bool save(App & a) {
+	if (!a.file_ours && std::ifstream(a.file)) {
+		a.message = a.file + " already exists; run ./bin/tui " + a.file + " to continue it";
+		return false;
+	}
 	std::ofstream out(a.file);
 	out << board_to_text(a.board);
 	out.close();
 	a.message = out ? "saved to " + a.file : "cannot write " + a.file;
+	if (out) a.file_ours = true;
 	return (bool)out;
 }
 
@@ -389,8 +402,14 @@ int main(int argc, char ** argv) {
 		a.fleet = fleet_by_name(fleet_name);
 		a.board = Board(W, H);
 		if (!a.file.empty()) {
+			a.file_ours = true;
 			std::ifstream in(a.file);
-			if (in) a.board = read_board(in);  // a missing file is created on save
+			std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+			// a missing or blank file starts an empty board and is written on save
+			if (text.find_first_not_of(" \t\r\n") != std::string::npos) {
+				std::istringstream ss(text);
+				a.board = read_board(ss);
+			}
 		} else {
 			a.file = "state.txt";
 		}
